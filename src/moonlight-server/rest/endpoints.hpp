@@ -459,7 +459,7 @@ void resume(const std::shared_ptr<typename SimpleWeb::Server<SimpleWeb::HTTPS>::
     new_session->pen_tablet = std::move(old_session->pen_tablet);
     new_session->touch_screen = std::move(old_session->touch_screen);
 
-    // Stop only the previous connection's RTP pipelines before accepting the replacement session.
+    // Request teardown of the old RTP pipelines before replacing the session record.
     state->event_bus->fire_event(immer::box<events::PauseStreamEvent>(
         events::PauseStreamEvent{.session_id = old_session->session_id,
                                  .rtp_secret_payload = old_session->rtp_secret_payload}));
