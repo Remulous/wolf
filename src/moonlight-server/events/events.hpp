@@ -2,6 +2,7 @@
 
 #define BOOST_THREAD_PROVIDES_FUTURE_CONTINUATION
 #define BOOST_THREAD_PROVIDES_FUTURE
+#include <array>
 #include <boost/thread.hpp>
 #include <boost/thread/future.hpp>
 #include <core/audio.hpp>
@@ -17,6 +18,7 @@
 #include <immer/vector.hpp>
 #include <moonlight/control.hpp>
 #include <moonlight/data-structures.hpp>
+#include <optional>
 #include <rfl.hpp>
 #include <rfl/json.hpp>
 #include <state/serialised_config.hpp>
@@ -290,6 +292,8 @@ struct IDRRequestEvent {
 
 struct PauseStreamEvent {
   std::size_t session_id;
+  // Identifies one stream generation. If absent, pauses every generation of the session.
+  std::optional<std::array<char, 16>> rtp_secret_payload;
 };
 
 struct ResumeStreamEvent {
