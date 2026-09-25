@@ -441,8 +441,9 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
         });
 
     auto pause_handler = event_bus->register_handler<immer::box<events::PauseStreamEvent>>(
-        [sess_id = video_session->session_id, pipeline](const immer::box<events::PauseStreamEvent> &ev) {
-          if (ev->session_id == sess_id) {
+        [sess_id = video_session->session_id, secret = video_session->rtp_secret_payload, pipeline](
+            const immer::box<events::PauseStreamEvent> &ev) {
+          if (ev->session_id == sess_id && (!ev->rtp_secret_payload || *ev->rtp_secret_payload == secret)) {
             logs::log(logs::debug, "[GSTREAMER] Pausing pipeline: {}", sess_id);
 
             /**
@@ -531,7 +532,8 @@ void start_streaming_audio(immer::box<events::AudioSession> audio_session,
       .socket = audio_socket,
       .client_endpoint = std::make_shared<udp::endpoint>(boost::asio::ip::make_address(client_ip), client_port)});
 
-  run_pipeline(pipeline, [session_id = audio_session->session_id, udp_sink, event_bus](auto pipeline) {
+  auto secret = audio_session->rtp_secret_payload;
+  run_pipeline(pipeline, [session_id = audio_session->session_id, secret, udp_sink, event_bus](auto pipeline) {
     if (auto app_sink_el = gst_bin_get_by_name(GST_BIN(pipeline.get()), "wolf_udp_sink")) {
       logs::log(logs::debug, "Setting up wolf_udp_sink");
       g_assert(GST_IS_APP_SINK(app_sink_el));
@@ -540,8 +542,8 @@ void start_streaming_audio(immer::box<events::AudioSession> audio_session,
     }
 
     auto pause_handler = event_bus->register_handler<immer::box<events::PauseStreamEvent>>(
-        [session_id, pipeline](const immer::box<events::PauseStreamEvent> &ev) {
-          if (ev->session_id == session_id) {
+        [session_id, secret, pipeline](const immer::box<events::PauseStreamEvent> &ev) {
+          if (ev->session_id == session_id && (!ev->rtp_secret_payload || *ev->rtp_secret_payload == secret)) {
             logs::log(logs::debug, "[GSTREAMER] Pausing pipeline: {}", session_id);
 
             /**
