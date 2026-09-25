@@ -459,6 +459,11 @@ void resume(const std::shared_ptr<typename SimpleWeb::Server<SimpleWeb::HTTPS>::
     new_session->pen_tablet = std::move(old_session->pen_tablet);
     new_session->touch_screen = std::move(old_session->touch_screen);
 
+    // Stop only the previous connection's RTP pipelines before accepting the replacement session.
+    state->event_bus->fire_event(immer::box<events::PauseStreamEvent>(
+        events::PauseStreamEvent{.session_id = old_session->session_id,
+                                 .rtp_secret_payload = old_session->rtp_secret_payload}));
+
     state->running_sessions->update([&old_session, new_session](const immer::vector<events::StreamSession> ses_v) {
       return state::remove_session(ses_v, old_session.value()).push_back(*new_session);
     });
