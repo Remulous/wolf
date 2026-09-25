@@ -141,12 +141,30 @@ std::optional<int> getCudaDeviceFromDri(const fs::path &driPath) {
   return getCudaDeviceIndexFromPciBusId(*pciBusId);
 }
 
+static bool is_context_valid(const gst_context_ptr &context) {
+  if (!context || !context->cuda_context) {
+    return false;
+  }
+  if (!gst_cuda_context_push(context->cuda_context.get())) {
+    logs::log(logs::warning, "Cached CUDA context can no longer be made current");
+    return false;
+  }
+  if (!gst_cuda_context_pop(nullptr)) {
+    logs::log(logs::warning, "Failed to pop cached CUDA context after validation");
+    return false;
+  }
+  return true;
+}
+
 bool set_context(gst_context_ptr context, GstMessage *msg) {
   if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_NEED_CONTEXT) {
     const gchar *context_type;
     gst_message_parse_context_type(msg, &context_type);
 
     if (g_strcmp0(context_type, GST_CUDA_CONTEXT_TYPE) == 0) {
+      if (!is_context_valid(context)) {
+        return false;
+      }
       gst_element_set_context(GST_ELEMENT(GST_MESSAGE_SRC(msg)), context->context);
       return true;
     }
