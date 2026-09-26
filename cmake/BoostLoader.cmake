@@ -23,6 +23,12 @@ if (NOT Boost_FOUND)
     )
     FetchContent_MakeAvailable(Boost)
 
+    # Simple-Web-Server still links Boost's historical header-only target.
+    # Boost's CMake build exposes the same target as Boost::headers.
+    if (TARGET Boost::headers AND NOT TARGET Boost::boost)
+        add_library(Boost::boost ALIAS Boost::headers)
+    endif ()
+
     set(Boost_FOUND TRUE)
     set(Boost_INCLUDE_DIRS "$<BUILD_INTERFACE:${Boost_SOURCE_DIR}/libs/headers/include>")
     set(Boost_LIBRARIES "")  # cmake-lint: disable=C0103
