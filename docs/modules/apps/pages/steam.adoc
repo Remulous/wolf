@@ -16,7 +16,6 @@ start_virtual_compositor = true
 
 [apps.runner]
 env = [
-  "PROTON_LOG=1",
   "RUN_SWAY=true",
   "GOW_REQUIRED_DEVICES=/dev/input/* /dev/dri/* /dev/nvidia*",
   "STEAM_STARTUP_FLAGS=steam://rungameid/1245620"
@@ -38,6 +37,8 @@ image:ROOT:mangohud_example.gif[Mangohud screenshot]
 === Proton (Steam Play) and other Vulkan games ===
 
 It's already installed and enabled in the default steam image for all Vulkan games (including Proton games).
+
+Set `PROTON_LOG=1` only while diagnosing a Proton issue. It can generate substantial disk I/O and cause game stutter.
 
 See below for how to activate it in game.
 

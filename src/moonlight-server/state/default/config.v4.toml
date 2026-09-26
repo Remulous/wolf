@@ -72,7 +72,6 @@ name = "WolfSteam"
 image = "ghcr.io/games-on-whales/steam:edge"
 mounts = []
 env = [
-    "PROTON_LOG=1",
     "RUN_SWAY=true",
     "GOW_REQUIRED_DEVICES=/dev/input/* /dev/dri/* /dev/nvidia*",
 ]
@@ -417,4 +416,3 @@ rtpmoonlightpay_audio name=moonlight_pay packet_duration={packet_duration} encry
 aes_key="{aes_key}" aes_iv="{aes_iv}" !
 appsink name=wolf_udp_sink\
 """
-
