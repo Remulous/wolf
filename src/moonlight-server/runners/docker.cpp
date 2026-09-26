@@ -42,6 +42,12 @@ void RunDocker::run(std::string_view session_id,
 
   std::vector<std::string> full_env;
   full_env.insert(full_env.end(), this->container.env.begin(), this->container.env.end());
+  // DXVK_FRAME_RATE is generated from the Moonlight session's requested refresh
+  // rate. Remove a legacy app-level value so Docker receives one unambiguous
+  // value for the session.
+  if (env_variables.find("DXVK_FRAME_RATE") != env_variables.end()) {
+    std::erase_if(full_env, [](const std::string &env) { return env.rfind("DXVK_FRAME_RATE=", 0) == 0; });
+  }
   for (const auto &env_var : env_variables) {
     full_env.push_back(fmt::format("{}={}", env_var.first, env_var.second));
   }

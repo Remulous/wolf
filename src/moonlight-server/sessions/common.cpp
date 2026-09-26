@@ -35,6 +35,11 @@ void start_runner(std::shared_ptr<events::Runner> runner,
   full_env.set("GAMESCOPE_WIDTH", std::to_string(args->video_settings.width));
   full_env.set("GAMESCOPE_HEIGHT", std::to_string(args->video_settings.height));
   full_env.set("GAMESCOPE_REFRESH", std::to_string(args->video_settings.refresh_rate));
+  // Keep DXVK/Proton's frame pacing aligned with the rate requested by this
+  // Moonlight session. This is intentionally set per session rather than in
+  // the app configuration because different clients can request 60, 120, or
+  // 144 Hz.
+  full_env.set("DXVK_FRAME_RATE", std::to_string(args->video_settings.refresh_rate));
   full_env.set("WOLF_VIDEO_BUFFER_CAPS", args->video_settings.video_producer_buffer_caps);
 
   if (auto w_display = args->wayland_display.get()) {

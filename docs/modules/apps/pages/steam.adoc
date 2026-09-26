@@ -40,6 +40,10 @@ It's already installed and enabled in the default steam image for all Vulkan gam
 
 Set `PROTON_LOG=1` only while diagnosing a Proton issue. It can generate substantial disk I/O and cause game stutter.
 
+Wolf sets `DXVK_FRAME_RATE` for each launched session to the refresh rate requested by its Moonlight client.
+This keeps Proton/DXVK games from rendering above the stream rate while allowing different clients to use, for example,
+60, 120, or 144 Hz. Wolf replaces any fixed `DXVK_FRAME_RATE` in the app's `env` array with this session-specific value.
+
 See below for how to activate it in game.
 
 === OpenGL (Native Linux) games ===
