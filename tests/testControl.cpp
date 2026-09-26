@@ -89,3 +89,39 @@ TEST_CASE("control joypad input packets") {
   REQUIRE(input_data->active_gamepad_mask == 1);
   REQUIRE(pressed_btns & pkts::CONTROLLER_BTN::A);
 }
+
+TEST_CASE("Control packet validation", "[CONTROL]") {
+  const auto valid_plaintext = crypto::hex_to_str("020302000000");
+  REQUIRE(is_valid_control_packet(valid_plaintext));
+  REQUIRE_FALSE(is_valid_control_packet({}));
+  REQUIRE_FALSE(is_valid_control_packet(valid_plaintext.substr(0, 5)));
+
+  const auto aes_key = "EDF04A215C4FBEA20934120C8480D855";
+  const auto encrypted = *encrypt_packet(aes_key, 1, valid_plaintext);
+  auto bytes = to_string(encrypted);
+  REQUIRE(is_valid_encrypted_control_packet(bytes));
+
+  bytes.resize(sizeof(ControlPacket) + sizeof(std::uint32_t) + GCM_TAG_SIZE - 1);
+  REQUIRE_FALSE(is_valid_encrypted_control_packet(bytes));
+}
+
+TEST_CASE("Control encryption preserves distinct sequence values", "[CONTROL]") {
+  const auto aes_key = "EDF04A215C4FBEA20934120C8480D855";
+  const auto payload = crypto::hex_to_str("020302000000");
+  const auto first = *encrypt_packet(aes_key, 0, payload);
+  const auto second = *encrypt_packet(aes_key, 1, payload);
+
+  REQUIRE(boost::endian::little_to_native(first.seq) == 0);
+  REQUIRE(boost::endian::little_to_native(second.seq) == 1);
+  REQUIRE(to_string(first) != to_string(second));
+}
+
+TEST_CASE("Input packet validation", "[CONTROL]") {
+  const auto valid_input =
+      crypto::hex_to_str("060222000000001E0C0000001A000000010014000010000000000000000000009C0000005500");
+  REQUIRE(is_valid_input_packet(valid_input));
+
+  auto truncated_input = valid_input;
+  truncated_input.resize(sizeof(pkts::INPUT_PKT));
+  REQUIRE_FALSE(is_valid_input_packet(truncated_input));
+}

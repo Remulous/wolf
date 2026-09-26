@@ -296,6 +296,13 @@ struct PauseStreamEvent {
   std::optional<std::array<char, 16>> rtp_secret_payload;
 };
 
+inline bool pause_event_matches(std::size_t session_id,
+                                const std::array<char, 16> &rtp_secret_payload,
+                                const PauseStreamEvent &event) {
+  return event.session_id == session_id &&
+         (!event.rtp_secret_payload || *event.rtp_secret_payload == rtp_secret_payload);
+}
+
 struct ResumeStreamEvent {
   std::size_t session_id;
 };

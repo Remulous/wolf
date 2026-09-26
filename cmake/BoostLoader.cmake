@@ -19,6 +19,7 @@ if (NOT Boost_FOUND)
     FetchContent_Declare(
             Boost
             URL "https://github.com/boostorg/boost/releases/download/boost-${BOOST_VERSION}/boost-${BOOST_VERSION}-cmake.tar.xz"
+            OVERRIDE_FIND_PACKAGE
     )
     FetchContent_MakeAvailable(Boost)
 

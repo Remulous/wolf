@@ -6,6 +6,9 @@
 #include <state/sessions.hpp>
 #include <sys/socket.h>
 
+#include <atomic>
+#include <limits>
+
 namespace control {
 
 using namespace ranges;
@@ -26,6 +29,11 @@ void free_host(ENetHost *host) {
 
 using enet_host = std::unique_ptr<ENetHost, decltype(&free_host)>;
 using enet_packet = std::unique_ptr<ENetPacket, decltype(&enet_packet_destroy)>;
+
+// The legacy Moonlight AES-GCM format includes this sequence number in its IV.
+// Allocate sequence values atomically so concurrent callbacks never emit the
+// old constant zero sequence value.
+static std::atomic_uint64_t next_control_sequence{0};
 
 bool init() {
   auto error_code = enet_initialize();
@@ -86,7 +94,12 @@ bool encrypt_and_send(std::string_view payload,
                       std::string_view aes_key,
                       immer::box<std::shared_ptr<ENetPeer>> connected_client) {
   if (auto enet_client = connected_client->get()) {
-    auto encrypted = control::encrypt_packet(aes_key, 0, payload); // TODO: seq?
+    const auto sequence = next_control_sequence.fetch_add(1, std::memory_order_relaxed);
+    if (sequence > std::numeric_limits<std::uint32_t>::max()) {
+      logs::log(logs::error, "[ENET] Control packet sequence space exhausted");
+      return false;
+    }
+    auto encrypted = control::encrypt_packet(aes_key, static_cast<std::uint32_t>(sequence), payload);
     return send_packet({(char *)encrypted.get(), encrypted->full_size()}, enet_client);
   } else {
     logs::log(logs::warning, "[ENET] Failed to send packet, client is not connected");
@@ -182,6 +195,11 @@ void run_control(int port,
         case ENET_EVENT_TYPE_RECEIVE:
           enet_packet packet = {event.packet, enet_packet_destroy};
 
+          if (packet->dataLength < sizeof(ControlPacket)) {
+            logs::log(logs::warning, "[ENET] Dropping runt control packet from {}:{}", client_ip, client_port);
+            break;
+          }
+
           auto type = ((ControlPacket *)packet->data)->type;
 
           logs::log(logs::trace,
@@ -194,8 +212,24 @@ void run_control(int port,
 
           if (type == ENCRYPTED) {
             try {
+              std::string_view encrypted_bytes{reinterpret_cast<const char *>(packet->data), packet->dataLength};
+              if (!is_valid_encrypted_control_packet(encrypted_bytes)) {
+                logs::log(logs::warning,
+                          "[ENET] Dropping malformed encrypted control packet from {}:{}",
+                          client_ip,
+                          client_port);
+                break;
+              }
+
               auto enc_pkt = (ControlEncryptedPacket *)(packet->data);
               auto decrypted = decrypt_packet(*enc_pkt, client_session->aes_key);
+              if (!is_valid_control_packet(decrypted)) {
+                logs::log(logs::warning,
+                          "[ENET] Dropping malformed decrypted control packet from {}:{}",
+                          client_ip,
+                          client_port);
+                break;
+              }
               auto sub_type = ((ControlPacket *)decrypted.data())->type;
 
               logs::log(logs::trace,
@@ -208,6 +242,10 @@ void run_control(int port,
                     PauseStreamEvent{.session_id = client_session->session_id,
                                      .rtp_secret_payload = client_session->rtp_secret_payload}));
               } else if (sub_type == INPUT_DATA) {
+                if (!is_valid_input_packet(decrypted)) {
+                  logs::log(logs::warning, "[ENET] Dropping malformed input packet from {}:{}", client_ip, client_port);
+                  break;
+                }
                 immer::box<std::shared_ptr<ENetPeer>> enet_client = {to_shared_ptr(event.peer)};
                 handle_input(client_session.value(), enet_client, (INPUT_PKT *)decrypted.data());
               } else if (sub_type == IDR_FRAME) {

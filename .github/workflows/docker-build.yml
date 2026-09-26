@@ -5,6 +5,9 @@ on:
     paths-ignore:
       - "docs/**"
       - ".github/**"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
 
 jobs:
   buildx:
@@ -26,24 +29,24 @@ jobs:
         run: |
           IMAGES=""
           PUSH=false
+          REGISTRY_IMAGE="ghcr.io/${{ github.repository_owner }}/wolf"
           if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
             IMAGES="gameonwhales/wolf"
             PUSH=true
             echo "has_docker_token=true" >> $GITHUB_OUTPUT
           fi
           if [ -n "${{ secrets.GHCR_TOKEN }}" ]; then
-            REGISTRY_IMAGE="ghcr.io/${{ github.repository_owner }}/wolf"
             if [ "$IMAGES" = "" ]; then
-              IMAGES="ghcr.io/${REGISTRY_IMAGE}"
+              IMAGES="$REGISTRY_IMAGE"
             else
-              IMAGES="$IMAGES,ghcr.io/${REGISTRY_IMAGE}"
+              IMAGES="$IMAGES,$REGISTRY_IMAGE"
             fi
             PUSH=true
             echo "has_github_token=true" >> $GITHUB_OUTPUT
             echo "cache_from=type=registry,ref=${REGISTRY_IMAGE}:buildcache" >> $GITHUB_OUTPUT
             echo "cache_to=type=registry,ref=${REGISTRY_IMAGE}:buildcache,mode=max" >> $GITHUB_OUTPUT
           else
-            echo "cache_from=type=registry,ref=${REGISTRY_IMAGE}:buildcache" >> $GITHUB_OUTPUT
+            echo "cache_from=" >> $GITHUB_OUTPUT
             echo "cache_to=" >> $GITHUB_OUTPUT
           fi
           echo "images=${IMAGES}" >> $GITHUB_OUTPUT
@@ -67,6 +70,7 @@ jobs:
           flavor: latest=false # let's not produce a :latest tag
 
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@v2
         with:
           install: true
@@ -95,7 +99,7 @@ jobs:
           builder: ${{ steps.buildx.outputs.name }}
           context: docker/
           file: docker/gpu-drivers.Dockerfile
-          push: true
+          push: ${{ steps.prep.outputs.push }}
           tags: ghcr.io/${{ github.repository_owner }}/gpu-drivers:2025.05,gameonwhales/gpu-drivers:2025.05 # TODO: set build version as param
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/gpu-drivers:buildcache
@@ -107,7 +111,7 @@ jobs:
           builder: ${{ steps.buildx.outputs.name }}
           context: docker/
           file: docker/gstreamer.Dockerfile
-          push: true
+          push: ${{ steps.prep.outputs.push }}
           build-args: |
             GSTREAMER_VERSION=1.26.7
             BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/gpu-drivers:2025.05
@@ -138,14 +142,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Login to GitHub Container Registry
-        if: steps.prep.outputs.has_github_token != '' # secrets not available in PRs
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_TOKEN }}
-
       - name: Run tests in devcontainer
         uses: devcontainers/ci@v0.3
         with:
@@ -153,20 +149,20 @@ jobs:
           imageName: ghcr.io/${{ github.repository_owner }}/wolf
           cacheFrom: ghcr.io/${{ github.repository_owner }}/wolf:buildcache
           push: never
-          # TODO:
-          # runCmd: |
-          #   cmake -Bbuild \
-          #         -H$GITHUB_WORKSPACE \
-          #         -DCMAKE_BUILD_TYPE=Debug \
-          #         -DCMAKE_CXX_EXTENSIONS=OFF \
-          #         -DTEST_VIRTUAL_INPUT=OFF \
-          #         -DTEST_DOCKER=ON \
-          #         -DTEST_RUST_WAYLAND=ON \
-          #         -DTEST_NVIDIA=OFF \
-          #         -DTEST_EXCEPTIONS=OFF \
-          #         -DTEST_UHID=OFF \
-          #         -G Ninja
-          #
-          #   ninja -j $(nproc) wolftests
-          #
-          #   ./wolftests --reporter JUnit::out=${{runner.workspace}}/report.xml --reporter console::out=-::colour-mode=ansi
+          runCmd: |
+            cmake -Bbuild \
+                  -H$GITHUB_WORKSPACE \
+                  -DCMAKE_BUILD_TYPE=Debug \
+                  -DCMAKE_CXX_STANDARD=20 \
+                  -DCMAKE_CXX_EXTENSIONS=OFF \
+                  -DADD_STACKTRACE_INFO=OFF \
+                  -DTEST_VIRTUAL_INPUT=OFF \
+                  -DTEST_DOCKER=OFF \
+                  -DTEST_RUST_WAYLAND=OFF \
+                  -DTEST_NVIDIA=OFF \
+                  -DTEST_EXCEPTIONS=OFF \
+                  -DTEST_UHID=OFF \
+                  -G Ninja
+
+            ninja -C build -j $(nproc) wolftests
+            cd build/tests && ./wolftests

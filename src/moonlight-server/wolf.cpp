@@ -211,9 +211,9 @@ void run() {
   }).detach();
 
   // RTP
-  rtp::start_rtp_ping(state::get_port(state::VIDEO_PING_PORT),
-                      state::get_port(state::AUDIO_PING_PORT),
-                      local_state->event_bus);
+  auto rtp_ping_server = rtp::start_rtp_ping(state::get_port(state::VIDEO_PING_PORT),
+                                             state::get_port(state::AUDIO_PING_PORT),
+                                             local_state->event_bus);
   // Wolf API server
   std::thread([local_state, runtime_dir]() { wolf::api::start_server(runtime_dir, local_state); }).detach();
 
@@ -273,6 +273,9 @@ void run() {
     std::this_thread::sleep_for(100ms);
   }
 
+  if (rtp_ping_server) {
+    rtp_ping_server->stop();
+  }
   logs::log(logs::info, "Graceful shutdown complete");
 }
 

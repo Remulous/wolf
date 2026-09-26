@@ -23,7 +23,7 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
 
     option(BUILD_SHARED_LIBS "Build libs as shared" ON)
 
-    option(ADD_STACKTRACE_INFO "Adds options in order to get proper stacktrace info on exceptions" ON)
+    option(ADD_STACKTRACE_INFO "Adds options in order to get proper stacktrace info on exceptions" OFF)
     if (ADD_STACKTRACE_INFO)
         # make sure to -DCMAKE_BUILD_TYPE=RelWithDebInfo)
         set_property(GLOBAL PROPERTY ENABLE_EXPORTS ON)

@@ -558,3 +558,20 @@ TEST_CASE("Multiple users", "[HTTP]") {
   REQUIRE(session4->video_stream_port == 48100);
   REQUIRE(session4->audio_stream_port == 48200);
 }
+
+TEST_CASE("Pause events only stop their stream generation", "[Streaming]") {
+  const std::array<char, 16> old_generation{1};
+  const std::array<char, 16> active_generation{2};
+  constexpr std::size_t session_id = 42;
+
+  const auto stale_pause = events::PauseStreamEvent{
+      .session_id = session_id,
+      .rtp_secret_payload = old_generation,
+  };
+  REQUIRE_FALSE(events::pause_event_matches(session_id, active_generation, stale_pause));
+  REQUIRE(events::pause_event_matches(session_id, old_generation, stale_pause));
+
+  const auto session_pause = events::PauseStreamEvent{.session_id = session_id, .rtp_secret_payload = std::nullopt};
+  REQUIRE(events::pause_event_matches(session_id, active_generation, session_pause));
+  REQUIRE_FALSE(events::pause_event_matches(session_id + 1, active_generation, session_pause));
+}

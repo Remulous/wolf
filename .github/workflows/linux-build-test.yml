@@ -134,6 +134,18 @@ jobs:
             test_virtual_input: OFF
             test_exceptions: ON
             name: clang++ - STD 20 - Shared false
+          - runner: ubuntu-26.04
+            arch: x86_64
+            cxx: clang++
+            other_pkgs: clang-18
+            shared: true
+            std: 20
+            cxx_flags: -fsanitize=address,undefined -fno-omit-frame-pointer
+            test_docker: OFF
+            test_nvidia: OFF
+            test_virtual_input: OFF
+            test_exceptions: OFF
+            name: clang++ - ASan/UBSan
 
     steps:
       - uses: actions/checkout@v6
@@ -189,6 +201,8 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_CXX_STANDARD=${{ matrix.std }} \
                 -DCMAKE_CXX_EXTENSIONS=OFF \
+                -DCMAKE_CXX_FLAGS="${{ matrix.cxx_flags }}" \
+                -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.cxx_flags }}" \
                 -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
                 -DCMAKE_C_COMPILER_LAUNCHER=ccache \
                 -DBUILD_SHARED_LIBS=${{ matrix.shared }} \
@@ -212,6 +226,7 @@ jobs:
           XDG_RUNTIME_DIR: /tmp
           RUST_BACKTRACE: FULL
           RUST_LOG: FATAL
+          ASAN_OPTIONS: detect_leaks=0
         run: ./wolftests --reporter JUnit::out=${{runner.workspace}}/report.xml --reporter console::out=-::colour-mode=ansi
 
       - name: Test Report

@@ -443,7 +443,7 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
     auto pause_handler = event_bus->register_handler<immer::box<events::PauseStreamEvent>>(
         [sess_id = video_session->session_id, secret = video_session->rtp_secret_payload, pipeline](
             const immer::box<events::PauseStreamEvent> &ev) {
-          if (ev->session_id == sess_id && (!ev->rtp_secret_payload || *ev->rtp_secret_payload == secret)) {
+          if (events::pause_event_matches(sess_id, secret, *ev)) {
             logs::log(logs::debug, "[GSTREAMER] Pausing pipeline: {}", sess_id);
 
             /**
@@ -543,7 +543,7 @@ void start_streaming_audio(immer::box<events::AudioSession> audio_session,
 
     auto pause_handler = event_bus->register_handler<immer::box<events::PauseStreamEvent>>(
         [session_id, secret, pipeline](const immer::box<events::PauseStreamEvent> &ev) {
-          if (ev->session_id == session_id && (!ev->rtp_secret_payload || *ev->rtp_secret_payload == secret)) {
+          if (events::pause_event_matches(session_id, secret, *ev)) {
             logs::log(logs::debug, "[GSTREAMER] Pausing pipeline: {}", session_id);
 
             /**

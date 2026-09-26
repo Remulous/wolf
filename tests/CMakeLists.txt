@@ -97,8 +97,7 @@ endif ()
 
 target_sources(wolftests PRIVATE ${SRC_LIST})
 
-# I'm using C++17 in the test
-target_compile_features(wolftests PRIVATE cxx_std_17)
+target_compile_features(wolftests PRIVATE cxx_std_20)
 
 # Should be linked to the main library, as well as the Catch2 testing library
 target_link_libraries_system(wolftests PRIVATE

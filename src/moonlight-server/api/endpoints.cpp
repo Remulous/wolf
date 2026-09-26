@@ -380,6 +380,11 @@ void UnixSocketServer::endpoint_StreamSessionHandleInput(const HTTPRequest &req,
     if (auto session = state::get_session_by_id(sessions.get(), session_id)) {
       auto hex_pkt = input_request.value().input_packet_hex.get();
       auto pkt_parsed = crypto::hex_to_str(hex_pkt);
+      if (!moonlight::control::is_valid_input_packet(pkt_parsed)) {
+        logs::log(logs::warning, "[API] Invalid input packet size for session {}", session_id);
+        send_http(socket, 400, rfl::json::write(GenericErrorResponse{.error = "Invalid input packet"}));
+        return;
+      }
       control::INPUT_PKT *input_pkt = reinterpret_cast<control::INPUT_PKT *>(pkt_parsed.data());
       control::handle_input(session.value(), {}, input_pkt);
 

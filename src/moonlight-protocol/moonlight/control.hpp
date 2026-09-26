@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <helpers/utils.hpp>
 #include <memory>
+#include <string_view>
 
 namespace moonlight::control {
 
@@ -388,6 +389,95 @@ struct ControlEncryptedPacket {
     return boost::endian::little_to_native(this->header.length) + sizeof(ControlPacket);
   }
 };
+
+/**
+ * Checks a complete control packet before it is reinterpreted as one of the
+ * protocol structs. ControlPacket::length excludes the four byte header.
+ */
+static bool is_valid_control_packet(std::string_view packet) {
+  if (packet.size() < sizeof(ControlPacket)) {
+    return false;
+  }
+
+  const auto *header = reinterpret_cast<const ControlPacket *>(packet.data());
+  const auto payload_length = boost::endian::little_to_native(header->length);
+  return payload_length == packet.size() - sizeof(ControlPacket);
+}
+
+/**
+ * Checks the encrypted envelope and its declared size before accessing its
+ * tag or ciphertext. The encrypted payload must at least contain a control
+ * header after the sequence number and GCM tag.
+ */
+static bool is_valid_encrypted_control_packet(std::string_view packet) {
+  constexpr auto envelope_size = sizeof(ControlPacket) + sizeof(std::uint32_t) + GCM_TAG_SIZE;
+  if (packet.size() < envelope_size || !is_valid_control_packet(packet)) {
+    return false;
+  }
+
+  const auto *header = reinterpret_cast<const ControlPacket *>(packet.data());
+  if (header->type != pkts::ENCRYPTED) {
+    return false;
+  }
+
+  const auto encrypted_length = boost::endian::little_to_native(header->length);
+  return encrypted_length >= sizeof(std::uint32_t) + GCM_TAG_SIZE + sizeof(ControlPacket) &&
+         encrypted_length <= sizeof(std::uint32_t) + GCM_TAG_SIZE + MAX_PAYLOAD_SIZE;
+}
+
+/**
+ * Input packet types carry fixed-size records. Verify the declared control
+ * packet size covers the record before input handling casts it to that type.
+ */
+static bool is_valid_input_packet(std::string_view packet) {
+  if (!is_valid_control_packet(packet) || packet.size() < sizeof(pkts::INPUT_PKT)) {
+    return false;
+  }
+
+  const auto *header = reinterpret_cast<const ControlPacket *>(packet.data());
+  if (header->type != pkts::INPUT_DATA) {
+    return false;
+  }
+
+  const auto *input = reinterpret_cast<const pkts::INPUT_PKT *>(packet.data());
+  const auto has_size = [packet](std::size_t size) { return packet.size() >= size; };
+  switch (input->type) {
+  case pkts::MOUSE_MOVE_REL:
+    return has_size(sizeof(pkts::MOUSE_MOVE_REL_PACKET));
+  case pkts::MOUSE_MOVE_ABS:
+    return has_size(sizeof(pkts::MOUSE_MOVE_ABS_PACKET));
+  case pkts::MOUSE_BUTTON_PRESS:
+  case pkts::MOUSE_BUTTON_RELEASE:
+    return has_size(sizeof(pkts::MOUSE_BUTTON_PACKET));
+  case pkts::MOUSE_SCROLL:
+    return has_size(sizeof(pkts::MOUSE_SCROLL_PACKET));
+  case pkts::MOUSE_HSCROLL:
+    return has_size(sizeof(pkts::MOUSE_HSCROLL_PACKET));
+  case pkts::KEY_PRESS:
+  case pkts::KEY_RELEASE:
+    return has_size(sizeof(pkts::KEYBOARD_PACKET));
+  case pkts::UTF8_TEXT:
+    return has_size(sizeof(pkts::UTF8_TEXT_PACKET));
+  case pkts::TOUCH:
+    return has_size(sizeof(pkts::TOUCH_PACKET));
+  case pkts::PEN:
+    return has_size(sizeof(pkts::PEN_PACKET));
+  case pkts::CONTROLLER_ARRIVAL:
+    return has_size(sizeof(pkts::CONTROLLER_ARRIVAL_PACKET));
+  case pkts::CONTROLLER_MULTI:
+    return has_size(sizeof(pkts::CONTROLLER_MULTI_PACKET));
+  case pkts::CONTROLLER_TOUCH:
+    return has_size(sizeof(pkts::CONTROLLER_TOUCH_PACKET));
+  case pkts::CONTROLLER_MOTION:
+    return has_size(sizeof(pkts::CONTROLLER_MOTION_PACKET));
+  case pkts::CONTROLLER_BATTERY:
+    return has_size(sizeof(pkts::CONTROLLER_BATTERY_PACKET));
+  case pkts::HAPTICS:
+    return has_size(sizeof(pkts::HAPTICS_PACKET));
+  default:
+    return true;
+  }
+}
 
 /**
  * Given a received packet will decrypt the payload inside it.

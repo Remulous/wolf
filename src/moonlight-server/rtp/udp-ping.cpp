@@ -17,6 +17,10 @@ void UDP_Server::start_receive() {
 }
 
 void UDP_Server::handle_receive(const boost::system::error_code &error, std::size_t bytes_transferred) {
+  if (error == boost::asio::error::operation_aborted) {
+    return;
+  }
+
   if (!error) {
     auto client_ip = remote_endpoint_.address().to_string();
     auto client_port = remote_endpoint_.port();
@@ -37,9 +41,35 @@ void UDP_Server::handle_receive(const boost::system::error_code &error, std::siz
   start_receive();
 }
 
-void start_rtp_ping(unsigned short video_port,
-                    unsigned short audio_port,
-                    std::shared_ptr<wolf::core::events::EventBusType> event_bus) {
+RTPPingServer::RTPPingServer(std::shared_ptr<boost::asio::io_context> io_context,
+                             std::shared_ptr<udp::socket> video_socket,
+                             std::shared_ptr<udp::socket> audio_socket,
+                             std::thread worker)
+    : io_context_(std::move(io_context)), video_socket_(std::move(video_socket)),
+      audio_socket_(std::move(audio_socket)), worker_(std::move(worker)) {}
+
+RTPPingServer::~RTPPingServer() {
+  stop();
+}
+
+void RTPPingServer::stop() {
+  if (!io_context_) {
+    return;
+  }
+
+  boost::system::error_code error;
+  video_socket_->close(error);
+  audio_socket_->close(error);
+  io_context_->stop();
+  if (worker_.joinable()) {
+    worker_.join();
+  }
+  io_context_.reset();
+}
+
+std::unique_ptr<RTPPingServer> start_rtp_ping(unsigned short video_port,
+                                              unsigned short audio_port,
+                                              std::shared_ptr<wolf::core::events::EventBusType> event_bus) {
   auto io_context = std::make_shared<boost::asio::io_context>();
 
   try {
@@ -47,7 +77,7 @@ void start_rtp_ping(unsigned short video_port,
     auto video_socket = std::make_shared<udp::socket>(*io_context, udp::endpoint(udp::v4(), video_port));
     auto audio_socket = std::make_shared<udp::socket>(*io_context, udp::endpoint(udp::v4(), audio_port));
 
-    std::thread([io_context, video_socket, audio_socket, event_bus]() {
+    std::thread worker([io_context, video_socket, audio_socket, event_bus]() {
       UDP_Server video_server(video_socket, [event_bus, video_socket](const RTPPingEvent &ping) {
         logs::log(logs::trace, "[RTP] video from {}:{}", ping.client_ip, ping.client_port);
         auto ev = wolf::core::events::RTPVideoPingEvent{.client_ip = ping.client_ip,
@@ -68,10 +98,12 @@ void start_rtp_ping(unsigned short video_port,
 
       io_context->run();
       logs::log(logs::info, "[RTP] server stopped");
-    }).detach();
+    });
 
+    return std::make_unique<RTPPingServer>(io_context, video_socket, audio_socket, std::move(worker));
   } catch (std::exception &e) {
     logs::log(logs::warning, "[RTP] Unable to start RTP server: {}", e.what());
+    return {};
   }
 }
 

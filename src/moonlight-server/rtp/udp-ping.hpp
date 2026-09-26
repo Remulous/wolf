@@ -3,6 +3,7 @@
 #include <boost/array.hpp>
 #include <boost/asio.hpp>
 #include <events/events.hpp>
+#include <thread>
 
 namespace rtp {
 
@@ -42,8 +43,27 @@ private:
   on_rtp_ping_fn callback;
 };
 
-void start_rtp_ping(unsigned short video_port,
-                    unsigned short audio_port,
-                    std::shared_ptr<wolf::core::events::EventBusType> event_bus);
+class RTPPingServer {
+public:
+  RTPPingServer(std::shared_ptr<boost::asio::io_context> io_context,
+                std::shared_ptr<udp::socket> video_socket,
+                std::shared_ptr<udp::socket> audio_socket,
+                std::thread worker);
+  RTPPingServer(const RTPPingServer &) = delete;
+  RTPPingServer &operator=(const RTPPingServer &) = delete;
+  ~RTPPingServer();
+
+  void stop();
+
+private:
+  std::shared_ptr<boost::asio::io_context> io_context_;
+  std::shared_ptr<udp::socket> video_socket_;
+  std::shared_ptr<udp::socket> audio_socket_;
+  std::thread worker_;
+};
+
+std::unique_ptr<RTPPingServer> start_rtp_ping(unsigned short video_port,
+                                              unsigned short audio_port,
+                                              std::shared_ptr<wolf::core::events::EventBusType> event_bus);
 
 } // namespace rtp
