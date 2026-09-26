@@ -26,7 +26,8 @@ if (NOT Boost_FOUND)
     # Simple-Web-Server still links Boost's historical header-only target.
     # Boost's CMake build exposes the same target as Boost::headers.
     if (TARGET Boost::headers AND NOT TARGET Boost::boost)
-        add_library(Boost::boost ALIAS Boost::headers)
+        add_library(Boost::boost INTERFACE IMPORTED GLOBAL)
+        set_property(TARGET Boost::boost PROPERTY INTERFACE_LINK_LIBRARIES Boost::headers)
     endif ()
 
     set(Boost_FOUND TRUE)
