@@ -107,15 +107,15 @@ bool encrypt_and_send(std::string_view payload,
   }
 }
 
-std::optional<events::StreamSession> get_current_session(const enet_clients_map &connected_clients,
-                                                         const state::SessionsAtoms &running_sessions,
-                                                         std::string_view client_ip,
-                                                         const ENetEvent &enet_event) {
+std::optional<immer::box<events::StreamSession>> get_current_session(const enet_clients_map &connected_clients,
+                                                                     const state::SessionsAtoms &running_sessions,
+                                                                     std::string_view client_ip,
+                                                                     const ENetEvent &enet_event) {
   if (enet_event.type == ENET_EVENT_TYPE_CONNECT) {
     // A new connection, we should check if there's a session that matches the current client
     for (const StreamSession &session : *running_sessions->load()) {
       if (session.enet_secret_payload == enet_event.data) {
-        return session;
+        return immer::box<events::StreamSession>{session};
       }
     }
     logs::log(logs::warning,
@@ -123,13 +123,13 @@ std::optional<events::StreamSession> get_current_session(const enet_clients_map 
               enet_event.data);
     for (const StreamSession &session : *running_sessions->load()) {
       if (session.ip == client_ip) {
-        return session;
+        return immer::box<events::StreamSession>{session};
       }
     }
   } else {
     // The connection has already been established, we'll check for a match in our connected client map
     if (auto client = connected_clients.find(enet_event.peer)) {
-      return client->get();
+      return *client;
     }
   }
   return std::nullopt;
@@ -183,14 +183,14 @@ void run_control(int port,
             return m.set(peer, client_session.value());
           });
           event_bus->fire_event(
-              immer::box<ResumeStreamEvent>(ResumeStreamEvent{.session_id = client_session->session_id}));
+              immer::box<ResumeStreamEvent>(ResumeStreamEvent{.session_id = client_session->get().session_id}));
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
           logs::log(logs::debug, "[ENET] disconnected client: {}:{}", client_ip, client_port);
           connected_clients.update([peer = event.peer](const enet_clients_map &m) { return m.erase(peer); });
-          event_bus->fire_event(
-              immer::box<PauseStreamEvent>(PauseStreamEvent{.session_id = client_session->session_id,
-                                                            .rtp_secret_payload = client_session->rtp_secret_payload}));
+          event_bus->fire_event(immer::box<PauseStreamEvent>(
+              PauseStreamEvent{.session_id = client_session->get().session_id,
+                               .rtp_secret_payload = client_session->get().rtp_secret_payload}));
           break;
         case ENET_EVENT_TYPE_RECEIVE:
           enet_packet packet = {event.packet, enet_packet_destroy};
@@ -202,14 +202,13 @@ void run_control(int port,
 
           auto type = ((ControlPacket *)packet->data)->type;
 
-          logs::log_lazy(logs::trace, [&] {
-            return fmt::format("[ENET] received {} of {} bytes from: {}:{} HEX: {}",
-                               packet_type_to_str(type),
-                               packet->dataLength,
-                               client_ip,
-                               client_port,
-                               crypto::str_to_hex({reinterpret_cast<char *>(packet->data), packet->dataLength}));
-          });
+          logs::log(logs::trace,
+                    "[ENET] received {} of {} bytes from: {}:{} HEX: {}",
+                    packet_type_to_str(type),
+                    packet->dataLength,
+                    client_ip,
+                    client_port,
+                    crypto::str_to_hex({(char *)packet->data, packet->dataLength}));
 
           if (type == ENCRYPTED) {
             try {
@@ -223,7 +222,7 @@ void run_control(int port,
               }
 
               auto enc_pkt = (ControlEncryptedPacket *)(packet->data);
-              auto decrypted = decrypt_packet(*enc_pkt, client_session->aes_key);
+              auto decrypted = decrypt_packet(*enc_pkt, client_session->get().aes_key);
               if (!is_valid_control_packet(decrypted)) {
                 logs::log(logs::warning,
                           "[ENET] Dropping malformed decrypted control packet from {}:{}",
@@ -233,25 +232,24 @@ void run_control(int port,
               }
               auto sub_type = ((ControlPacket *)decrypted.data())->type;
 
-              logs::log_lazy(logs::trace, [&] {
-                return fmt::format("[ENET] decrypted sub_type: {} HEX: {}",
-                                   packet_type_to_str(sub_type),
-                                   crypto::str_to_hex(decrypted));
-              });
+              logs::log(logs::trace,
+                        "[ENET] decrypted sub_type: {} HEX: {}",
+                        packet_type_to_str(sub_type),
+                        crypto::str_to_hex(decrypted));
 
               if (sub_type == TERMINATION) {
                 event_bus->fire_event(immer::box<PauseStreamEvent>(
-                    PauseStreamEvent{.session_id = client_session->session_id,
-                                     .rtp_secret_payload = client_session->rtp_secret_payload}));
+                    PauseStreamEvent{.session_id = client_session->get().session_id,
+                                     .rtp_secret_payload = client_session->get().rtp_secret_payload}));
               } else if (sub_type == INPUT_DATA) {
                 if (!is_valid_input_packet(decrypted)) {
                   logs::log(logs::warning, "[ENET] Dropping malformed input packet from {}:{}", client_ip, client_port);
                   break;
                 }
                 immer::box<std::shared_ptr<ENetPeer>> enet_client = {to_shared_ptr(event.peer)};
-                handle_input(client_session.value(), enet_client, (INPUT_PKT *)decrypted.data());
+                handle_input(client_session->get(), enet_client, (INPUT_PKT *)decrypted.data());
               } else if (sub_type == IDR_FRAME) {
-                auto ev = IDRRequestEvent{.session_id = client_session->session_id};
+                auto ev = IDRRequestEvent{.session_id = client_session->get().session_id};
                 event_bus->fire_event(immer::box<IDRRequestEvent>{ev});
               } else if (sub_type == FRAME_FEC_STATUS) {
                 if (!is_valid_frame_fec_status_packet(decrypted)) {
@@ -263,7 +261,7 @@ void run_control(int port,
                 }
                 const auto *status = reinterpret_cast<const ControlFrameFecStatusPacket *>(decrypted.data());
                 event_bus->fire_event(immer::box<VideoFecStatusEvent>{VideoFecStatusEvent{
-                    .session_id = client_session->session_id,
+                    .session_id = client_session->get().session_id,
                     .frame_index = boost::endian::big_to_native(status->frame_index),
                     .missing_packets = boost::endian::big_to_native(status->missing_packets_before_highest_received),
                     .total_data_packets = boost::endian::big_to_native(status->total_data_packets),
@@ -282,7 +280,7 @@ void run_control(int port,
                 }
                 const auto *stats = reinterpret_cast<const ControlLossStatsPacket *>(decrypted.data());
                 event_bus->fire_event(immer::box<VideoLossStatsEvent>{VideoLossStatsEvent{
-                    .session_id = client_session->session_id,
+                    .session_id = client_session->get().session_id,
                     .reporting_interval_ms = boost::endian::little_to_native(stats->reporting_interval_ms),
                     .last_good_frame = boost::endian::little_to_native(stats->last_good_frame),
                 }});
@@ -308,7 +306,7 @@ void run_control(int port,
                   break;
                 }
                 event_bus->fire_event(immer::box<ReferenceFrameInvalidationEvent>{ReferenceFrameInvalidationEvent{
-                    .session_id = client_session->session_id,
+                    .session_id = client_session->get().session_id,
                     .first_frame_index = first_frame,
                     .last_frame_index = last_frame,
                 }});
@@ -317,11 +315,10 @@ void run_control(int port,
               logs::log(logs::warning, "[ENET] Unable to decrypt incoming packet: {}", e.what());
             }
           } else {
-            logs::log_lazy(logs::warning, [&] {
-              return fmt::format("[ENET] Received unencrypted message: {} - {}",
-                                 packet_type_to_str(type),
-                                 crypto::str_to_hex({reinterpret_cast<char *>(packet->data), packet->dataLength}));
-            });
+            logs::log(logs::warning,
+                      "[ENET] Received unencrypted message: {} - {}",
+                      packet_type_to_str(type),
+                      crypto::str_to_hex({(char *)packet->data, packet->dataLength}));
           }
           break;
         }
