@@ -108,9 +108,9 @@ bool encrypt_and_send(std::string_view payload,
 }
 
 std::optional<immer::box<events::StreamSession>> get_current_session(const enet_clients_map &connected_clients,
-                                                                     const state::SessionsAtoms &running_sessions,
-                                                                     std::string_view client_ip,
-                                                                     const ENetEvent &enet_event) {
+                                                         const state::SessionsAtoms &running_sessions,
+                                                         std::string_view client_ip,
+                                                         const ENetEvent &enet_event) {
   if (enet_event.type == ENET_EVENT_TYPE_CONNECT) {
     // A new connection, we should check if there's a session that matches the current client
     for (const StreamSession &session : *running_sessions->load()) {
@@ -188,9 +188,9 @@ void run_control(int port,
         case ENET_EVENT_TYPE_DISCONNECT:
           logs::log(logs::debug, "[ENET] disconnected client: {}:{}", client_ip, client_port);
           connected_clients.update([peer = event.peer](const enet_clients_map &m) { return m.erase(peer); });
-          event_bus->fire_event(immer::box<PauseStreamEvent>(
-              PauseStreamEvent{.session_id = client_session->get().session_id,
-                               .rtp_secret_payload = client_session->get().rtp_secret_payload}));
+          event_bus->fire_event(
+              immer::box<PauseStreamEvent>(PauseStreamEvent{.session_id = client_session->get().session_id,
+                                                            .rtp_secret_payload = client_session->get().rtp_secret_payload}));
           break;
         case ENET_EVENT_TYPE_RECEIVE:
           enet_packet packet = {event.packet, enet_packet_destroy};
@@ -202,13 +202,14 @@ void run_control(int port,
 
           auto type = ((ControlPacket *)packet->data)->type;
 
-          logs::log(logs::trace,
-                    "[ENET] received {} of {} bytes from: {}:{} HEX: {}",
-                    packet_type_to_str(type),
-                    packet->dataLength,
-                    client_ip,
-                    client_port,
-                    crypto::str_to_hex({(char *)packet->data, packet->dataLength}));
+          logs::log_lazy(logs::trace, [&] {
+            return fmt::format("[ENET] received {} of {} bytes from: {}:{} HEX: {}",
+                               packet_type_to_str(type),
+                               packet->dataLength,
+                               client_ip,
+                               client_port,
+                               crypto::str_to_hex({reinterpret_cast<char *>(packet->data), packet->dataLength}));
+          });
 
           if (type == ENCRYPTED) {
             try {
@@ -232,10 +233,11 @@ void run_control(int port,
               }
               auto sub_type = ((ControlPacket *)decrypted.data())->type;
 
-              logs::log(logs::trace,
-                        "[ENET] decrypted sub_type: {} HEX: {}",
-                        packet_type_to_str(sub_type),
-                        crypto::str_to_hex(decrypted));
+              logs::log_lazy(logs::trace, [&] {
+                return fmt::format("[ENET] decrypted sub_type: {} HEX: {}",
+                                   packet_type_to_str(sub_type),
+                                   crypto::str_to_hex(decrypted));
+              });
 
               if (sub_type == TERMINATION) {
                 event_bus->fire_event(immer::box<PauseStreamEvent>(
@@ -315,10 +317,11 @@ void run_control(int port,
               logs::log(logs::warning, "[ENET] Unable to decrypt incoming packet: {}", e.what());
             }
           } else {
-            logs::log(logs::warning,
-                      "[ENET] Received unencrypted message: {} - {}",
-                      packet_type_to_str(type),
-                      crypto::str_to_hex({(char *)packet->data, packet->dataLength}));
+            logs::log_lazy(logs::warning, [&] {
+              return fmt::format("[ENET] Received unencrypted message: {} - {}",
+                                 packet_type_to_str(type),
+                                 crypto::str_to_hex({reinterpret_cast<char *>(packet->data), packet->dataLength}));
+            });
           }
           break;
         }
