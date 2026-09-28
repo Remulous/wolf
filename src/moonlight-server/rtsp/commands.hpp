@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <events/events.hpp>
 #include <helpers/logger.hpp>
@@ -38,7 +39,13 @@ RTSP_PACKET ok_msg(int sequence_number,
 // Additional feature supports
 constexpr uint32_t FS_PEN_TOUCH_EVENTS = 0x01;
 constexpr uint32_t FS_CONTROLLER_TOUCH_EVENTS = 0x02;
+constexpr int MIN_VIDEO_PACKET_SIZE = 256;
+constexpr int MAX_VIDEO_PACKET_SIZE = 1392;
 using namespace wolf::core::audio;
+
+inline int sanitize_video_packet_size(int requested_size) {
+  return std::clamp(requested_size, MIN_VIDEO_PACKET_SIZE, MAX_VIDEO_PACKET_SIZE);
+}
 
 RTSP_PACKET
 describe(const RTSP_PACKET &req, const events::StreamSession &session) {
@@ -192,6 +199,14 @@ announce(const RTSP_PACKET &req, const events::StreamSession &session) {
 
   auto audio_channels = args["x-nv-audio.surround.numChannels"].value_or(session.audio_channel_count);
   auto fec_percentage = 20; // TODO: setting?
+  const auto requested_packet_size = args["x-nv-video[0].packetSize"].value_or(MAX_VIDEO_PACKET_SIZE);
+  const auto packet_size = sanitize_video_packet_size(requested_packet_size);
+  if (packet_size != requested_packet_size) {
+    logs::log(logs::warning,
+              "[RTSP] Clamped unsafe video packet size from {} to {} bytes",
+              requested_packet_size,
+              packet_size);
+  }
 
   long bitrate = args["x-nv-vqos[0].bw.maximumBitrateKbps"].value_or(15500);
   // If the client sent a configured bitrate adjust it (Moonlight extension)
@@ -225,7 +240,7 @@ announce(const RTSP_PACKET &req, const events::StreamSession &session) {
 
       .port = session.video_stream_port,
       .timeout_ms = args["x-nv-video[0].timeoutLengthMs"].value_or(7000),
-      .packet_size = args["x-nv-video[0].packetSize"].value_or(1392),
+      .packet_size = packet_size,
       .frames_with_invalid_ref_threshold = args["x-nv-video[0].framesWithInvalidRefThreshold"].value_or(0),
       .fec_percentage = fec_percentage,
       // Moonlight clients always send minRequiredFecPackets=2 (moonlight-common-c/SdpGenerator.c)

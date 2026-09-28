@@ -1,5 +1,6 @@
 #include "platforms/hw.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <control/control.hpp>
 #include <core/batched_send.hpp>
@@ -216,8 +217,12 @@ struct UDPSink {
   std::shared_ptr<udp::endpoint> client_endpoint;
   PacingConfig pacing;
   std::shared_ptr<AdaptiveFecController> adaptive_fec;
+  std::shared_ptr<AdaptiveBitrateController> adaptive_bitrate;
   gst_element_ptr video_payloader;
+  gst_element_ptr video_encoder;
   int active_fec_percentage = 0;
+  long active_encoder_bitrate_kbps = 0;
+  std::shared_ptr<std::atomic<std::uint32_t>> last_sent_frame = std::make_shared<std::atomic<std::uint32_t>>(0);
   wolf::platform::batched_send_info_t send_info;
 };
 
@@ -240,6 +245,90 @@ static void apply_adaptive_fec_for_next_frame(UDPSink *udp_sink) {
             desired_fec);
   g_object_set(udp_sink->video_payloader.get(), "fec_percentage", desired_fec, nullptr);
   udp_sink->active_fec_percentage = desired_fec;
+}
+
+static gst_element_ptr find_video_encoder(GstElement *pipeline) {
+  GstIterator *iterator = gst_bin_iterate_recurse(GST_BIN(pipeline));
+  GValue item = G_VALUE_INIT;
+  gst_element_ptr result;
+
+  while (gst_iterator_next(iterator, &item) == GST_ITERATOR_OK) {
+    auto *element = GST_ELEMENT(g_value_get_object(&item));
+    auto *factory = gst_element_get_factory(element);
+    const auto *klass = factory ? gst_element_factory_get_metadata(factory, GST_ELEMENT_METADATA_KLASS) : nullptr;
+    if (klass && std::string_view(klass).find("Encoder/Video") != std::string_view::npos) {
+      auto *object_class = G_OBJECT_GET_CLASS(element);
+      if (g_object_class_find_property(object_class, "bitrate") ||
+          g_object_class_find_property(object_class, "target-bitrate")) {
+        result = gst_element_ptr(GST_ELEMENT(gst_object_ref(element)), ::gst_object_unref);
+        g_value_reset(&item);
+        break;
+      }
+    }
+    g_value_reset(&item);
+  }
+
+  g_value_unset(&item);
+  gst_iterator_free(iterator);
+  return result;
+}
+
+static bool set_encoder_bitrate(GstElement *encoder, long bitrate_kbps) {
+  const auto *factory_name = gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(gst_element_get_factory(encoder)));
+  const char *property_name = g_object_class_find_property(G_OBJECT_GET_CLASS(encoder), "bitrate") ? "bitrate"
+                                                                                                   : "target-bitrate";
+  auto *property = g_object_class_find_property(G_OBJECT_GET_CLASS(encoder), property_name);
+  if (!property || !(property->flags & G_PARAM_WRITABLE)) {
+    return false;
+  }
+
+  // Apple VideoToolbox and OpenH264 expose bits/sec. The encoders shipped in
+  // Wolf's current defaults expose kbits/sec.
+  std::uint64_t value = static_cast<std::uint64_t>(bitrate_kbps);
+  const std::string_view factory = factory_name ? factory_name : "";
+  if (factory.starts_with("vtenc_") || factory == "openh264enc") {
+    value *= 1000;
+  }
+
+  GValue property_value = G_VALUE_INIT;
+  g_value_init(&property_value, G_PARAM_SPEC_VALUE_TYPE(property));
+  if (G_VALUE_HOLDS_INT(&property_value)) {
+    g_value_set_int(&property_value, static_cast<gint>(value));
+  } else if (G_VALUE_HOLDS_UINT(&property_value)) {
+    g_value_set_uint(&property_value, static_cast<guint>(value));
+  } else if (G_VALUE_HOLDS_INT64(&property_value)) {
+    g_value_set_int64(&property_value, static_cast<gint64>(value));
+  } else if (G_VALUE_HOLDS_UINT64(&property_value)) {
+    g_value_set_uint64(&property_value, value);
+  } else {
+    g_value_unset(&property_value);
+    return false;
+  }
+  g_object_set_property(G_OBJECT(encoder), property_name, &property_value);
+  g_value_unset(&property_value);
+  return true;
+}
+
+static void apply_adaptive_bitrate_for_next_frame(UDPSink *udp_sink) {
+  if (!udp_sink->adaptive_bitrate || !udp_sink->video_encoder) {
+    return;
+  }
+  const auto desired_bitrate = udp_sink->adaptive_bitrate->desired_bitrate_kbps();
+  if (desired_bitrate == udp_sink->active_encoder_bitrate_kbps) {
+    return;
+  }
+  if (!set_encoder_bitrate(udp_sink->video_encoder.get(), desired_bitrate)) {
+    logs::log(logs::warning, "[GSTREAMER] Encoder does not support runtime bitrate adjustment");
+    udp_sink->video_encoder.reset();
+    return;
+  }
+
+  logs::log(logs::info,
+            "[GSTREAMER] Adjusting video bitrate from {} to {} Kbps",
+            udp_sink->active_encoder_bitrate_kbps,
+            desired_bitrate);
+  udp_sink->active_encoder_bitrate_kbps = desired_bitrate;
+  udp_sink->pacing.encoder_bitrate_bps = static_cast<std::uint64_t>(desired_bitrate) * 1000;
 }
 
 static void ensure_socket_open(UDPSink *udp_sink, bool is_video) {
@@ -275,6 +364,11 @@ static GstFlowReturn send_buffer_batched(GstBufferList *buffer_list, UDPSink *ud
       return GST_FLOW_ERROR;
     }
     mapped_buffers.emplace_back(buffer, map);
+    if (i == 0 && map.size >= sizeof(gst_moonlight_video::VideoRTPHeaders)) {
+      const auto *headers = reinterpret_cast<const gst_moonlight_video::VideoRTPHeaders *>(map.data);
+      udp_sink->last_sent_frame->store(boost::endian::little_to_native(headers->packet.frameIndex),
+                                       std::memory_order_relaxed);
+    }
     udp_sink->send_info.payload_buffers[i] =
         wolf::platform::buffer_descriptor_t(reinterpret_cast<const char *>(map.data), map.size);
   }
@@ -336,6 +430,7 @@ static GstFlowReturn send_buffer_batched(GstBufferList *buffer_list, UDPSink *ud
   // upstream payloader only after sending it so the next frame and its pacing
   // budget switch percentages together.
   apply_adaptive_fec_for_next_frame(udp_sink);
+  apply_adaptive_bitrate_for_next_frame(udp_sink);
 
   return GST_FLOW_OK;
 }
@@ -452,7 +547,9 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
           },
       .adaptive_fec =
           std::make_shared<AdaptiveFecController>(video_session->adaptive_fec, video_session->fec_percentage),
-      .active_fec_percentage = video_session->fec_percentage});
+      .adaptive_bitrate = std::make_shared<AdaptiveBitrateController>(video_session->bitrate_kbps),
+      .active_fec_percentage = video_session->fec_percentage,
+      .active_encoder_bitrate_kbps = video_session->bitrate_kbps});
   std::shared_ptr<NeedContextData> ctx_data_ptr = std::make_shared<NeedContextData>(
       NeedContextData{.device_path = video_session->render_node, .gst_context = video_context});
   run_pipeline(pipeline, [video_session, event_bus, udp_sink, ctx_data_ptr](auto pipeline) {
@@ -466,6 +563,10 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
       udp_sink->video_payloader = gst_element_ptr(payloader, ::gst_object_unref);
     } else if (video_session->adaptive_fec) {
       logs::log(logs::warning, "[GSTREAMER] Adaptive FEC disabled: moonlight_pay element not found");
+    }
+    udp_sink->video_encoder = custom_sink::find_video_encoder(pipeline.get());
+    if (!udp_sink->video_encoder) {
+      logs::log(logs::warning, "[GSTREAMER] Adaptive bitrate disabled: video encoder not found");
     }
 
     auto bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline.get()));
@@ -489,9 +590,20 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
 
     auto fec_status_handler = event_bus->register_handler<immer::box<events::VideoFecStatusEvent>>(
         [sess_id = video_session->session_id,
-         controller = udp_sink->adaptive_fec](const immer::box<events::VideoFecStatusEvent> &status) {
+         fec_controller = udp_sink->adaptive_fec,
+         bitrate_controller = udp_sink->adaptive_bitrate](const immer::box<events::VideoFecStatusEvent> &status) {
           if (status->session_id == sess_id) {
-            controller->report(*status);
+            fec_controller->report(*status);
+            bitrate_controller->report(*status);
+          }
+        });
+
+    auto loss_stats_handler = event_bus->register_handler<immer::box<events::VideoLossStatsEvent>>(
+        [sess_id = video_session->session_id,
+         controller = udp_sink->adaptive_bitrate,
+         last_sent_frame = udp_sink->last_sent_frame](const immer::box<events::VideoLossStatsEvent> &status) {
+          if (status->session_id == sess_id) {
+            controller->report(*status, last_sent_frame->load(std::memory_order_relaxed));
           }
         });
 
@@ -562,6 +674,7 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
 
     return immer::array<immer::box<events::EventBusHandlers>>{std::move(idr_handler),
                                                               std::move(fec_status_handler),
+                                                              std::move(loss_stats_handler),
                                                               std::move(invalidate_handler),
                                                               std::move(pause_handler),
                                                               std::move(switch_producer_handler),

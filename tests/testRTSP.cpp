@@ -5,6 +5,7 @@ using Catch::Matchers::Equals;
 
 #include <boost/beast/_experimental/test/stream.hpp>
 #include <crypto/crypto.hpp>
+#include <rtsp/commands.hpp>
 #include <rtsp/net.hpp>
 #include <rtsp/parser.hpp>
 #include <state/data-structures.hpp>
@@ -14,6 +15,12 @@ using namespace state;
 using namespace rtsp;
 using namespace wolf::core::audio;
 using namespace wolf::core;
+
+TEST_CASE("Video packet size is clamped to safe RTP bounds", "[RTSP]") {
+  REQUIRE(rtsp::commands::sanitize_video_packet_size(64) == rtsp::commands::MIN_VIDEO_PACKET_SIZE);
+  REQUIRE(rtsp::commands::sanitize_video_packet_size(1024) == 1024);
+  REQUIRE(rtsp::commands::sanitize_video_packet_size(9000) == rtsp::commands::MAX_VIDEO_PACKET_SIZE);
+}
 
 /**
  * In order to test rtsp::tcp_connection we create a derived class that does the opposite:

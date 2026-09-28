@@ -266,6 +266,40 @@ TEST_CASE("Adaptive video FEC raises on loss and decays on clean feedback", "[St
   REQUIRE(disabled.desired_percentage() == 20);
 }
 
+TEST_CASE("Adaptive video bitrate backs off on loss and recovers gradually", "[Streaming]") {
+  using clock = streaming::AdaptiveBitrateController::clock;
+  const auto start = clock::time_point{};
+  streaming::AdaptiveBitrateController controller(20000, start);
+
+  const wolf::core::events::VideoFecStatusEvent light_loss{
+      .missing_packets = 1,
+      .total_data_packets = 80,
+      .total_parity_packets = 20,
+  };
+  controller.report(light_loss, start);
+  REQUIRE(controller.desired_bitrate_kbps(start) == 18000);
+
+  const wolf::core::events::VideoFecStatusEvent heavy_loss{
+      .missing_packets = 10,
+      .total_data_packets = 80,
+      .total_parity_packets = 20,
+  };
+  controller.report(heavy_loss, start + std::chrono::seconds(1));
+  REQUIRE(controller.desired_bitrate_kbps(start + std::chrono::seconds(1)) == 12600);
+  REQUIRE(controller.desired_bitrate_kbps(start + std::chrono::seconds(5)) == 12600);
+  REQUIRE(controller.desired_bitrate_kbps(start + std::chrono::seconds(6)) == 13600);
+  REQUIRE(controller.desired_bitrate_kbps(start + std::chrono::seconds(8)) == 14600);
+
+  streaming::AdaptiveBitrateController legacy_controller(20000, start);
+  const wolf::core::events::VideoLossStatsEvent near_realtime{.last_good_frame = 95};
+  legacy_controller.report(near_realtime, 100, start);
+  REQUIRE(legacy_controller.desired_bitrate_kbps(start) == 20000);
+
+  const wolf::core::events::VideoLossStatsEvent lagging{.last_good_frame = 90};
+  legacy_controller.report(lagging, 100, start);
+  REQUIRE(legacy_controller.desired_bitrate_kbps(start) == 16000);
+}
+
 TEST_CASE_METHOD(GStreamerTestsFixture, "Video FEC block count respects the 255 shard limit", "[GSTPlugin]") {
   auto rtpmoonlightpay = (gst_rtp_moonlight_pay_video *)g_object_new(gst_TYPE_rtp_moonlight_pay_video, nullptr);
   rtpmoonlightpay->fec_percentage = 20;

@@ -13,6 +13,7 @@
 #include <gst/gst.h>
 #include <gstreamer-1.0/gst/app/gstappsrc.h>
 #include <immer/box.hpp>
+#include <limits>
 #include <memory>
 #include <moonlight/fec.hpp>
 #include <mutex>
@@ -71,6 +72,76 @@ private:
   static constexpr int ceiling_ = 50;
   static constexpr auto decrease_interval_ = std::chrono::seconds(5);
   clock::time_point last_decrease_;
+  std::mutex mutex_;
+};
+
+class AdaptiveBitrateController {
+public:
+  using clock = std::chrono::steady_clock;
+
+  explicit AdaptiveBitrateController(long baseline_kbps, clock::time_point started_at = clock::now())
+      : baseline_kbps_(std::max(1L, baseline_kbps)),
+        floor_kbps_(std::min(baseline_kbps_, std::max(1000L, baseline_kbps_ * 40 / 100))),
+        current_kbps_(baseline_kbps_), last_congestion_(started_at), last_increase_(started_at) {}
+
+  void report(const events::VideoFecStatusEvent &status, clock::time_point now = clock::now()) {
+    const auto total_packets = static_cast<unsigned int>(status.total_data_packets) + status.total_parity_packets;
+    if (total_packets == 0 || status.missing_packets == 0) {
+      return;
+    }
+    const auto loss_percentage = (static_cast<unsigned int>(status.missing_packets) * 100 + total_packets - 1) /
+                                 total_packets;
+    report_loss(loss_percentage, now);
+  }
+
+  void report(const events::VideoLossStatsEvent &status,
+              std::uint32_t last_sent_frame,
+              clock::time_point now = clock::now()) {
+    const auto last_good_frame = static_cast<std::uint32_t>(status.last_good_frame);
+    const auto lag = last_sent_frame - last_good_frame;
+    // Legacy reports contain no packet counts. A sustained frame lag is the
+    // only congestion signal available, so leave enough room for normal decode
+    // and reporting latency before reducing quality.
+    if (last_sent_frame != 0 && lag < (std::numeric_limits<std::uint32_t>::max() / 2) && lag > 6) {
+      report_loss(lag > 15 ? 10 : 3, now);
+    }
+  }
+
+  long desired_bitrate_kbps(clock::time_point now = clock::now()) {
+    std::scoped_lock lock(mutex_);
+    if (current_kbps_ < baseline_kbps_ && now - last_congestion_ >= recovery_delay_ &&
+        now - last_increase_ >= increase_interval_) {
+      current_kbps_ = std::min(baseline_kbps_, current_kbps_ + std::max(1L, baseline_kbps_ / 20));
+      last_increase_ = now;
+    }
+    return current_kbps_;
+  }
+
+private:
+  void report_loss(unsigned int loss_percentage, clock::time_point now) {
+    std::scoped_lock lock(mutex_);
+    last_congestion_ = now;
+    if (has_reduced_ && now - last_reduction_ < reduction_interval_) {
+      return;
+    }
+
+    const long multiplier = loss_percentage >= 10 ? 70 : (loss_percentage >= 3 ? 80 : 90);
+    current_kbps_ = std::max(floor_kbps_, current_kbps_ * multiplier / 100);
+    last_reduction_ = now;
+    last_increase_ = now;
+    has_reduced_ = true;
+  }
+
+  long baseline_kbps_;
+  long floor_kbps_;
+  long current_kbps_;
+  bool has_reduced_ = false;
+  static constexpr auto reduction_interval_ = std::chrono::seconds(1);
+  static constexpr auto recovery_delay_ = std::chrono::seconds(5);
+  static constexpr auto increase_interval_ = std::chrono::seconds(2);
+  clock::time_point last_congestion_;
+  clock::time_point last_reduction_{};
+  clock::time_point last_increase_;
   std::mutex mutex_;
 };
 

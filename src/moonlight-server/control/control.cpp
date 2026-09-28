@@ -270,6 +270,20 @@ void run_control(int port,
                     .received_parity_packets = boost::endian::big_to_native(status->received_parity_packets),
                     .fec_percentage = status->fec_percentage,
                 }});
+              } else if (sub_type == LOSS_STATS) {
+                if (!is_valid_loss_stats_packet(decrypted)) {
+                  logs::log(logs::warning,
+                            "[ENET] Dropping malformed loss statistics from {}:{}",
+                            client_ip,
+                            client_port);
+                  break;
+                }
+                const auto *stats = reinterpret_cast<const ControlLossStatsPacket *>(decrypted.data());
+                event_bus->fire_event(immer::box<VideoLossStatsEvent>{VideoLossStatsEvent{
+                    .session_id = client_session->session_id,
+                    .reporting_interval_ms = boost::endian::little_to_native(stats->reporting_interval_ms),
+                    .last_good_frame = boost::endian::little_to_native(stats->last_good_frame),
+                }});
               } else if (sub_type == INVALIDATE_REF_FRAMES) {
                 if (!is_valid_reference_frame_invalidation_packet(decrypted)) {
                   logs::log(logs::warning,
