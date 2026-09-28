@@ -251,6 +251,51 @@ void run_control(int port,
               } else if (sub_type == IDR_FRAME) {
                 auto ev = IDRRequestEvent{.session_id = client_session->session_id};
                 event_bus->fire_event(immer::box<IDRRequestEvent>{ev});
+              } else if (sub_type == FRAME_FEC_STATUS) {
+                if (!is_valid_frame_fec_status_packet(decrypted)) {
+                  logs::log(logs::warning,
+                            "[ENET] Dropping malformed frame FEC status from {}:{}",
+                            client_ip,
+                            client_port);
+                  break;
+                }
+                const auto *status = reinterpret_cast<const ControlFrameFecStatusPacket *>(decrypted.data());
+                event_bus->fire_event(immer::box<VideoFecStatusEvent>{VideoFecStatusEvent{
+                    .session_id = client_session->session_id,
+                    .frame_index = boost::endian::big_to_native(status->frame_index),
+                    .missing_packets = boost::endian::big_to_native(status->missing_packets_before_highest_received),
+                    .total_data_packets = boost::endian::big_to_native(status->total_data_packets),
+                    .total_parity_packets = boost::endian::big_to_native(status->total_parity_packets),
+                    .received_data_packets = boost::endian::big_to_native(status->received_data_packets),
+                    .received_parity_packets = boost::endian::big_to_native(status->received_parity_packets),
+                    .fec_percentage = status->fec_percentage,
+                }});
+              } else if (sub_type == INVALIDATE_REF_FRAMES) {
+                if (!is_valid_reference_frame_invalidation_packet(decrypted)) {
+                  logs::log(logs::warning,
+                            "[ENET] Dropping malformed reference-frame invalidation from {}:{}",
+                            client_ip,
+                            client_port);
+                  break;
+                }
+                const auto *request =
+                    reinterpret_cast<const ControlInvalidateReferenceFramesPacket *>(decrypted.data());
+                const auto first_frame = boost::endian::little_to_native(request->first_frame_index);
+                const auto last_frame = boost::endian::little_to_native(request->last_frame_index);
+                if (first_frame > last_frame) {
+                  logs::log(logs::warning,
+                            "[ENET] Dropping invalid reference-frame range {}-{} from {}:{}",
+                            first_frame,
+                            last_frame,
+                            client_ip,
+                            client_port);
+                  break;
+                }
+                event_bus->fire_event(immer::box<ReferenceFrameInvalidationEvent>{ReferenceFrameInvalidationEvent{
+                    .session_id = client_session->session_id,
+                    .first_frame_index = first_frame,
+                    .last_frame_index = last_frame,
+                }});
               }
             } catch (std::runtime_error &e) {
               logs::log(logs::warning, "[ENET] Unable to decrypt incoming packet: {}", e.what());

@@ -1,5 +1,7 @@
 #pragma once
+#include <algorithm>
 #include <boost/asio.hpp>
+#include <chrono>
 #include <core/gstreamer.hpp>
 #include <core/virtual-display.hpp>
 #include <events/events.hpp>
@@ -7,16 +9,70 @@
 #include <gst-plugin/gstrtpmoonlightpay_audio.hpp>
 #include <gst-plugin/gstrtpmoonlightpay_video.hpp>
 #include <gst-plugin/video.hpp>
+#include <gst-video-context.hpp>
 #include <gst/gst.h>
 #include <gstreamer-1.0/gst/app/gstappsrc.h>
 #include <immer/box.hpp>
 #include <memory>
 #include <moonlight/fec.hpp>
+#include <mutex>
 
 namespace streaming {
 
 using namespace wolf::core;
 using boost::asio::ip::udp;
+
+class AdaptiveFecController {
+public:
+  using clock = std::chrono::steady_clock;
+
+  AdaptiveFecController(bool enabled, int baseline_percentage, clock::time_point started_at = clock::now())
+      : enabled_(enabled), baseline_(std::clamp(baseline_percentage, 0, 100)),
+        floor_(enabled ? std::max(5, baseline_ / 2) : baseline_), current_(baseline_), last_decrease_(started_at) {}
+
+  void report(const events::VideoFecStatusEvent &status, clock::time_point now = clock::now()) {
+    if (!enabled_) {
+      return;
+    }
+    std::scoped_lock lock(mutex_);
+    const auto total_shards = static_cast<unsigned int>(status.total_data_packets) + status.total_parity_packets;
+    if (total_shards == 0) {
+      return;
+    }
+
+    const auto loss_percentage = (static_cast<unsigned int>(status.missing_packets) * 100 + total_shards - 1) /
+                                 total_shards;
+    // Keep roughly twice the observed loss rate plus a small safety margin.
+    // Increases are immediate; sustained clean reports reduce overhead slowly.
+    const auto target = std::clamp(static_cast<int>(loss_percentage * 2 + 5), floor_, ceiling_);
+    if (target > current_) {
+      current_ = target;
+      last_decrease_ = now;
+    } else if (target < current_ && now - last_decrease_ >= decrease_interval_) {
+      current_ = std::max(target, current_ - 5);
+      last_decrease_ = now;
+    }
+  }
+
+  int desired_percentage() {
+    if (!enabled_) {
+      return baseline_;
+    }
+
+    std::scoped_lock lock(mutex_);
+    return current_;
+  }
+
+private:
+  bool enabled_;
+  int baseline_;
+  int floor_;
+  int current_;
+  static constexpr int ceiling_ = 50;
+  static constexpr auto decrease_interval_ = std::chrono::seconds(5);
+  clock::time_point last_decrease_;
+  std::mutex mutex_;
+};
 
 struct WaylandDisplayReady {
   /**
