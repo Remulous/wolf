@@ -202,13 +202,14 @@ void run_control(int port,
 
           auto type = ((ControlPacket *)packet->data)->type;
 
-          logs::log(logs::trace,
-                    "[ENET] received {} of {} bytes from: {}:{} HEX: {}",
-                    packet_type_to_str(type),
-                    packet->dataLength,
-                    client_ip,
-                    client_port,
-                    crypto::str_to_hex({(char *)packet->data, packet->dataLength}));
+          logs::log_lazy(logs::trace, [&] {
+            return fmt::format("[ENET] received {} of {} bytes from: {}:{} HEX: {}",
+                               packet_type_to_str(type),
+                               packet->dataLength,
+                               client_ip,
+                               client_port,
+                               crypto::str_to_hex({reinterpret_cast<char *>(packet->data), packet->dataLength}));
+          });
 
           if (type == ENCRYPTED) {
             try {
@@ -232,10 +233,11 @@ void run_control(int port,
               }
               auto sub_type = ((ControlPacket *)decrypted.data())->type;
 
-              logs::log(logs::trace,
-                        "[ENET] decrypted sub_type: {} HEX: {}",
-                        packet_type_to_str(sub_type),
-                        crypto::str_to_hex(decrypted));
+              logs::log_lazy(logs::trace, [&] {
+                return fmt::format("[ENET] decrypted sub_type: {} HEX: {}",
+                                   packet_type_to_str(sub_type),
+                                   crypto::str_to_hex(decrypted));
+              });
 
               if (sub_type == TERMINATION) {
                 event_bus->fire_event(immer::box<PauseStreamEvent>(
@@ -315,10 +317,11 @@ void run_control(int port,
               logs::log(logs::warning, "[ENET] Unable to decrypt incoming packet: {}", e.what());
             }
           } else {
-            logs::log(logs::warning,
-                      "[ENET] Received unencrypted message: {} - {}",
-                      packet_type_to_str(type),
-                      crypto::str_to_hex({(char *)packet->data, packet->dataLength}));
+            logs::log_lazy(logs::warning, [&] {
+              return fmt::format("[ENET] Received unencrypted message: {} - {}",
+                                 packet_type_to_str(type),
+                                 crypto::str_to_hex({reinterpret_cast<char *>(packet->data), packet->dataLength}));
+            });
           }
           break;
         }

@@ -14,6 +14,7 @@
 #include <boost/log/sources/exception_handler_feature.hpp>
 #include <boost/log/sources/global_logger_storage.hpp>
 #include <boost/log/sources/logger.hpp>
+#include <boost/log/sources/record_ostream.hpp>
 #include <boost/log/sources/severity_logger.hpp>
 #include <boost/log/support/date_time.hpp>
 #include <boost/log/trivial.hpp>
@@ -120,6 +121,30 @@ BOOST_LOG_INLINE_GLOBAL_LOGGER_INIT(my_logger, my_logger_mt) {
 }
 
 /**
+ * @brief Produce and emit a message only if its severity passes the active filters.
+ *
+ * The factory must have no required side effects. It is only called after
+ * Boost.Log has accepted the record, which makes it suitable for expensive
+ * diagnostic formatting and serialization.
+ */
+template <typename MessageFactory> inline bool log_lazy(severity_level lvl, MessageFactory &&message_factory) {
+  try {
+    auto record = my_logger::get().open_record(boost::log::keywords::severity = lvl);
+    if (!record) {
+      return false;
+    }
+
+    boost::log::record_ostream stream(record);
+    stream << std::forward<MessageFactory>(message_factory)();
+    stream.flush();
+    return true;
+  } catch (const std::exception &e) {
+    std::cout << "Failed to produce log message: " << e.what();
+    return false;
+  }
+}
+
+/**
  * @brief output a log message with optional format
  *
  * @param lv: log level
@@ -127,13 +152,8 @@ BOOST_LOG_INLINE_GLOBAL_LOGGER_INIT(my_logger, my_logger_mt) {
  * @param args: optional additional args to be formatted
  */
 template <typename... Args>
-inline void log(severity_level lvl, fmt::format_string<Args...> format_str, Args &&...args) {
-  try {
-    auto msg = fmt::format(format_str, std::forward<Args>(args)...);
-    BOOST_LOG_SEV(my_logger::get(), lvl) << msg;
-  } catch (const std::exception &e) {
-    std::cout << "Failed to format log message: " << e.what();
-  }
+inline bool log(severity_level lvl, fmt::format_string<Args...> format_str, Args &&...args) {
+  return log_lazy(lvl, [&] { return fmt::format(format_str, std::forward<Args>(args)...); });
 }
 
 inline logs::severity_level parse_level(const std::string &level) {
