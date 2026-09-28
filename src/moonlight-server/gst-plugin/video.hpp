@@ -1,6 +1,7 @@
 #pragma once
 #include <boost/endian.hpp>
 #include <cmath>
+#include <cstring>
 #include <gst-plugin/gstrtpmoonlightpay_video.hpp>
 #include <gst-plugin/utils.hpp>
 #include <helpers/logger.hpp>
@@ -258,6 +259,11 @@ static void generate_fec_packets(const gst_rtp_moonlight_pay_video &rtpmoonlight
     return;
   }
 
+  // Allocate the complete block once. Zero initialization preserves padding
+  // after a short final data shard and the existing parity initialization.
+  GstBuffer *rtp_payload = gst_buffer_new_and_fill(static_cast<gsize>(nr_shards) * blocks.block_size, 0x00);
+  gst_buffer_map(rtp_payload, &info, GST_MAP_WRITE);
+
   // Finalize data headers before Reed-Solomon encoding. Recovered packets must
   // contain the same per-block flags and stream indexes as packets sent on the
   // wire, otherwise Moonlight rejects the reconstructed block.
@@ -274,22 +280,9 @@ static void generate_fec_packets(const gst_rtp_moonlight_pay_video &rtpmoonlight
                     last_block_index,
                     timestamp);
     gst_copy_timestamps(inbuf, data_pkt);
+    std::memcpy(info.data + static_cast<gsize>(shard_idx) * blocks.block_size, data_info.data, data_info.size);
     gst_buffer_unmap(data_pkt, &data_info);
   }
-
-  GstBuffer *rtp_payload = gst_buffer_list_unfold(rtp_packets);
-  auto payload_size = (int)gst_buffer_get_size(rtp_payload);
-
-  // pads rtp_payload to blocksize
-  if (payload_size % blocks.block_size != 0) {
-    GstBuffer *pad = gst_buffer_new_and_fill((blocks.data_shards * blocks.block_size) - payload_size, 0x00);
-    rtp_payload = gst_buffer_append(rtp_payload, pad);
-  }
-
-  // Allocate space for FEC packets
-  auto fec_buff = gst_buffer_new_and_fill((blocks.parity_shards * blocks.block_size), 0x00);
-  rtp_payload = gst_buffer_append(rtp_payload, fec_buff);
-  gst_buffer_map(rtp_payload, &info, GST_MAP_WRITE);
 
   // Reed Solomon encode the full stream of bytes
   auto rs = moonlight::fec::create(blocks.data_shards, blocks.parity_shards);

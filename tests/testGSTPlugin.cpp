@@ -6,6 +6,7 @@
 
 using Catch::Matchers::Equals;
 
+#include "video_fec_reference.hpp"
 #include <gst-plugin/audio.hpp>
 #include <gst-plugin/video.hpp>
 #include <moonlight/fec.hpp>
@@ -192,6 +193,139 @@ TEST_CASE_METHOD(GStreamerTestsFixture, "Multi-block video FEC has recoverable b
   gst_buffer_list_unref(final_packets);
   gst_buffer_unref(payload);
   g_object_unref(rtpmoonlightpay);
+}
+
+TEST_CASE_METHOD(GStreamerTestsFixture,
+                 "Video FEC workspace preserves wire bytes and recovery",
+                 "[GSTPlugin][FECWorkspace]") {
+  using namespace gst_moonlight_video;
+  // Exercise short/exact final payloads, all four block counts, fallback without
+  // FEC, changing FEC geometry, and the 16-bit RTP sequence wrap boundary.
+  for (bool padding : {false, true}) {
+    for (int percentage : {0, 5, 20, 50}) {
+      for (int payload_bytes : {1, 40, 41, 1000, 13000, 25000, 39000, 50000}) {
+        for (bool delta : {false, true}) {
+          CAPTURE(padding, percentage, payload_bytes, delta);
+          auto make_payloader = [&]() {
+            auto pay = (gst_rtp_moonlight_pay_video *)g_object_new(gst_TYPE_rtp_moonlight_pay_video, nullptr);
+            pay->payload_size = 64;
+            pay->add_padding = padding;
+            pay->fec_percentage = percentage;
+            pay->cur_seq_number = 65530;
+            pay->frame_num = 42;
+            return std::unique_ptr<gst_rtp_moonlight_pay_video, decltype(&g_object_unref)>(pay, g_object_unref);
+          };
+          auto actual_pay = make_payloader();
+          auto reference_pay = make_payloader();
+          std::vector<unsigned char> payload(payload_bytes);
+          for (int i = 0; i < payload_bytes; ++i) {
+            payload[i] = static_cast<unsigned char>(i * 37 + i / 251);
+          }
+          auto input = std::unique_ptr<GstBuffer, decltype(&gst_buffer_unref)>(
+              gst_buffer_new_and_fill(payload.size(), reinterpret_cast<const char *>(payload.data())),
+              gst_buffer_unref);
+          GST_BUFFER_PTS(input.get()) = 2 * GST_SECOND;
+          GST_BUFFER_DTS(input.get()) = GST_SECOND;
+          GST_BUFFER_DURATION(input.get()) = GST_SECOND / 60;
+          GST_BUFFER_OFFSET(input.get()) = 42;
+          GST_BUFFER_OFFSET_END(input.get()) = 43;
+          if (delta) {
+            GST_BUFFER_FLAG_SET(input.get(), GST_BUFFER_FLAG_DELTA_UNIT);
+          }
+          auto actual = std::unique_ptr<GstBufferList, decltype(&gst_buffer_list_unref)>(
+              split_into_rtp(actual_pay.get(), input.get()),
+              gst_buffer_list_unref);
+          auto reference = std::unique_ptr<GstBufferList, decltype(&gst_buffer_list_unref)>(
+              video_fec_reference::split(reference_pay.get(), input.get()),
+              gst_buffer_list_unref);
+          const int count = gst_buffer_list_length(actual.get());
+          REQUIRE(count == gst_buffer_list_length(reference.get()));
+          REQUIRE(actual_pay->cur_seq_number == reference_pay->cur_seq_number);
+          REQUIRE(actual_pay->cur_seq_number == 65530 + count);
+          REQUIRE(actual_pay->frame_num == 43);
+          REQUIRE(get_buf_refcount(input.get()) >= 1);
+          for (int i = 0; i < count; ++i) {
+            auto a = gst_buffer_list_get(actual.get(), i);
+            auto r = gst_buffer_list_get(reference.get(), i);
+            REQUIRE(gst_buffer_copy_content(a) == gst_buffer_copy_content(r));
+            REQUIRE(GST_BUFFER_PTS(a) == GST_BUFFER_PTS(r));
+            REQUIRE(GST_BUFFER_DTS(a) == GST_BUFFER_DTS(r));
+            REQUIRE(GST_BUFFER_DURATION(a) == GST_BUFFER_DURATION(r));
+            REQUIRE(GST_BUFFER_OFFSET(a) == GST_BUFFER_OFFSET(r));
+            REQUIRE(GST_BUFFER_OFFSET_END(a) == GST_BUFFER_OFFSET_END(r));
+            auto bytes = gst_buffer_copy_content(a);
+            auto header = reinterpret_cast<const VideoRTPHeaders *>(bytes.data());
+            REQUIRE(boost::endian::big_to_native(header->rtp.sequenceNumber) == static_cast<uint16_t>(65530 + i));
+            REQUIRE(boost::endian::big_to_native(header->rtp.timestamp) == 180000);
+            REQUIRE(header->packet.frameIndex == 42);
+          }
+          const int shard_payload = actual_pay->payload_size - MAX_RTP_HEADER_SIZE;
+          const int data_count = (payload_bytes + sizeof(VideoShortHeader) + shard_payload - 1) / shard_payload;
+          const int blocks = percentage > 0 ? required_fec_blocks(*actual_pay, data_count) : 0;
+          const int per_block = blocks ? (data_count + blocks - 1) / blocks : data_count;
+          int offset = 0;
+          std::vector<unsigned char> restored_payload;
+          for (int block = 0; block < std::max(1, blocks); ++block) {
+            const int data = std::min(per_block, data_count - block * per_block);
+            const auto geometry = determine_split(*actual_pay, data);
+            const int parity = blocks ? geometry.parity_shards : 0;
+            const int width = geometry.block_size;
+            std::vector<std::vector<unsigned char>> shards(data + parity, std::vector<unsigned char>(width, 0));
+            for (int i = 0; i < data + parity; ++i) {
+              const auto bytes = gst_buffer_copy_content(gst_buffer_list_get(actual.get(), offset + i));
+              REQUIRE(bytes.size() <= width);
+              std::copy(bytes.begin(), bytes.end(), shards[i].begin());
+              if (i < data) {
+                const auto *header = reinterpret_cast<const VideoRTPHeaders *>(bytes.data());
+                REQUIRE(header->packet.flags ==
+                        (FLAG_CONTAINS_PIC_DATA | (i == 0 ? FLAG_SOF : 0) | (i == data - 1 ? FLAG_EOF : 0)));
+                REQUIRE(header->packet.streamPacketIndex == static_cast<uint32_t>((65530 + offset + i) << 8));
+                REQUIRE(header->packet.multiFecBlocks == (blocks ? ((block << 4) | ((blocks - 1) << 6)) : 0));
+                restored_payload.insert(restored_payload.end(), bytes.begin() + sizeof(VideoRTPHeaders), bytes.end());
+              }
+            }
+            if (parity >= 2 && data >= 2) {
+              const auto originals = shards;
+              std::vector<unsigned char *> pointers;
+              for (auto &shard : shards) {
+                pointers.push_back(shard.data());
+              }
+              std::vector<unsigned char> marks(data + parity, 0);
+              // Lose both block boundary data packets, including a short final shard.
+              for (int missing : {0, data - 1}) {
+                marks[missing] = 1;
+                std::fill(shards[missing].begin(), shards[missing].end(), 0);
+              }
+              auto rs = moonlight::fec::create(data, parity);
+              REQUIRE(moonlight::fec::decode(rs.get(), pointers.data(), marks.data(), data + parity, width) == 0);
+              for (int missing : {0, data - 1}) {
+                // Parity RTP headers are rewritten after encoding, so on-wire
+                // shards reconstruct payload, not the original parity-covered header.
+                REQUIRE(std::vector<unsigned char>(shards[missing].begin() + sizeof(VideoRTPHeaders),
+                                                   shards[missing].end()) ==
+                        std::vector<unsigned char>(originals[missing].begin() + sizeof(VideoRTPHeaders),
+                                                   originals[missing].end()));
+              }
+            }
+            offset += data + parity;
+          }
+          REQUIRE(offset == count);
+          const auto *short_header = reinterpret_cast<const VideoShortHeader *>(restored_payload.data());
+          REQUIRE(short_header->header_type == 1);
+          REQUIRE(short_header->frame_type == (delta ? 1 : 2));
+          const int remainder = (payload_bytes + sizeof(VideoShortHeader)) % shard_payload;
+          REQUIRE(short_header->last_payload_len == (remainder ? remainder : shard_payload));
+          REQUIRE(std::equal(payload.begin(), payload.end(), restored_payload.begin() + sizeof(VideoShortHeader)));
+          const auto meaningful_size = payload_bytes + sizeof(VideoShortHeader);
+          REQUIRE(restored_payload.size() == (padding ? data_count * shard_payload : meaningful_size));
+          REQUIRE(std::all_of(restored_payload.begin() + meaningful_size, restored_payload.end(), [](auto b) {
+            return b == 0;
+          }));
+          REQUIRE(gst_buffer_copy_content(input.get()) == payload);
+        }
+      }
+    }
+  }
 }
 
 TEST_CASE_METHOD(GStreamerTestsFixture, "Video RTP timestamps use the 90 kHz clock", "[GSTPlugin]") {
