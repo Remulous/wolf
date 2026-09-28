@@ -199,15 +199,14 @@ namespace custom_sink {
 
 struct PacingConfig {
   bool enabled = false;
-  std::size_t max_packets_per_ms = 0;
+  std::uint64_t bitrate_bps = 0;
   /**
    * Maximum number of packets per sendmmsg() syscall.
-   * Caps batch size to stay under 64KB per call, following Sunshine's pattern.
-   * Computed at runtime as min(16, 65536 / packet_size).
-   * Does not affect pacing rate — only syscall granularity.
+   * This is also capped to roughly 1 ms of traffic so a batch does not become
+   * the same kind of microburst that pacing is intended to prevent.
    */
   std::size_t max_batch_size = 16;
-  std::chrono::steady_clock::time_point next_frame_start = std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point next_send_time = std::chrono::steady_clock::now();
 };
 
 struct UDPSink {
@@ -260,31 +259,25 @@ static GstFlowReturn send_buffer_batched(GstBufferList *buffer_list, UDPSink *ud
 
   bool success = true;
 
-  if (!udp_sink->pacing.enabled || num_buffers <= udp_sink->pacing.max_batch_size) {
+  if (!udp_sink->pacing.enabled) {
     udp_sink->send_info.block_offset = 0;
     udp_sink->send_info.block_count = num_buffers;
     success = wolf::platform::send_batch(udp_sink->send_info);
   } else {
     auto &pacing = udp_sink->pacing;
-    auto frame_start = std::max(pacing.next_frame_start, std::chrono::steady_clock::now());
+    auto next_send_time = std::max(pacing.next_send_time, std::chrono::steady_clock::now());
     std::size_t packets_sent = 0;
-    std::size_t packets_in_window = 0;
 
     while (packets_sent < num_buffers) {
-      std::size_t remaining = num_buffers - packets_sent;
-      std::size_t budget = pacing.max_packets_per_ms - packets_in_window;
-
-      if (budget == 0) {
-        auto due = frame_start + std::chrono::nanoseconds(1000000) * packets_sent / pacing.max_packets_per_ms;
-        auto now = std::chrono::steady_clock::now();
-        if (now < due) {
-          std::this_thread::sleep_until(due);
-        }
-        packets_in_window = 0;
-        continue;
+      if (auto now = std::chrono::steady_clock::now(); now < next_send_time) {
+        std::this_thread::sleep_until(next_send_time);
       }
 
-      std::size_t batch = std::min({budget, pacing.max_batch_size, remaining});
+      std::size_t batch = std::min(pacing.max_batch_size, num_buffers - packets_sent);
+      std::size_t batch_bytes = 0;
+      for (std::size_t i = 0; i < batch; ++i) {
+        batch_bytes += udp_sink->send_info.payload_buffers[packets_sent + i].size;
+      }
 
       udp_sink->send_info.block_offset = packets_sent;
       udp_sink->send_info.block_count = batch;
@@ -294,11 +287,11 @@ static GstFlowReturn send_buffer_batched(GstBufferList *buffer_list, UDPSink *ud
       }
 
       packets_sent += batch;
-      packets_in_window += batch;
+      auto transmission_time = std::chrono::duration<double>(static_cast<double>(batch_bytes) * 8 / pacing.bitrate_bps);
+      next_send_time += std::chrono::duration_cast<std::chrono::steady_clock::duration>(transmission_time);
     }
 
-    pacing.next_frame_start = frame_start +
-                              std::chrono::nanoseconds(1000000) * packets_sent / pacing.max_packets_per_ms;
+    pacing.next_send_time = next_send_time;
   }
 
   for (auto &[buffer, m] : mapped_buffers) {
@@ -400,14 +393,21 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
   logs::log(logs::debug, "Starting video pipeline: \n{}", pipeline);
 
   bool enable_pacing = utils::get_env("WOLF_ENABLE_VIDEO_PACING", "TRUE") == std::string("TRUE");
+  // The encoder bitrate excludes FEC packets. Pace the actual wire traffic with
+  // 25% headroom so a normally-sized frame is delivered before the next frame
+  // arrives without draining it at the old hard-coded 800 Mbps burst rate.
+  auto encoder_bitrate_bps = static_cast<std::uint64_t>(std::max(1L, video_session->bitrate_kbps)) * 1000;
+  auto pacing_bitrate_bps = encoder_bitrate_bps * static_cast<std::uint64_t>(100 + video_session->fec_percentage) *
+                            125 / 100 / 100;
+  auto packet_size = static_cast<std::size_t>(std::max(1, video_session->packet_size));
+  auto packets_per_ms = std::max<std::uint64_t>(1, pacing_bitrate_bps / 1000 / (packet_size * 8));
   std::shared_ptr<custom_sink::UDPSink> udp_sink = std::make_shared<custom_sink::UDPSink>(custom_sink::UDPSink{
       .socket = video_socket,
       .client_endpoint = std::make_shared<udp::endpoint>(boost::asio::ip::make_address(client_ip), client_port),
       .pacing = {
           .enabled = enable_pacing,
-          .max_packets_per_ms = static_cast<std::size_t>(
-              std::max(1L, static_cast<long>(1000000000L * 80 / 100 / 1000 / (video_session->packet_size * 8)))),
-          .max_batch_size = std::min<std::size_t>(16, 65536 / video_session->packet_size),
+          .bitrate_bps = pacing_bitrate_bps,
+          .max_batch_size = std::min<std::size_t>({16, 65536 / packet_size, packets_per_ms}),
       }});
   std::shared_ptr<NeedContextData> ctx_data_ptr = std::make_shared<NeedContextData>(
       NeedContextData{.device_path = video_session->render_node, .gst_context = video_context});

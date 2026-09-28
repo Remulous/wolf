@@ -183,6 +183,29 @@ static BLOCKS determine_split(const gst_rtp_moonlight_pay_video &rtpmoonlightpay
 }
 
 /**
+ * Return the number of FEC blocks required to keep every Reed-Solomon group
+ * within the 255-shard limit. The Moonlight protocol can describe at most four
+ * FEC blocks (the current and last block indexes are both two bits).
+ *
+ * A zero return value means the frame cannot be represented with the requested
+ * FEC percentage. In that case it must be sent without FEC rather than with
+ * metadata for an FEC block that was never generated.
+ */
+static int required_fec_blocks(const gst_rtp_moonlight_pay_video &rtpmoonlightpay, int data_shards) {
+  constexpr int max_fec_blocks = 4;
+
+  for (int nr_blocks = 1; nr_blocks <= max_fec_blocks; ++nr_blocks) {
+    auto packets_per_block = (data_shards + nr_blocks - 1) / nr_blocks;
+    auto largest_block = determine_split(rtpmoonlightpay, packets_per_block);
+    if (largest_block.data_shards + largest_block.parity_shards <= DATA_SHARDS_MAX) {
+      return nr_blocks;
+    }
+  }
+
+  return 0;
+}
+
+/**
  * Given the RTP packets that contains payload,
  * will generate extra RTP packets with the FEC information.
  *
@@ -281,11 +304,11 @@ static void generate_fec_packets(const gst_rtp_moonlight_pay_video &rtpmoonlight
 static GstBufferList *generate_fec_multi_blocks(gst_rtp_moonlight_pay_video *rtpmoonlightpay,
                                                 GstBufferList *rtp_packets,
                                                 int data_shards,
-                                                GstBuffer *inbuf) {
+                                                GstBuffer *inbuf,
+                                                int nr_blocks) {
   auto rtp_packets_size = gst_buffer_list_length(rtp_packets);
 
-  constexpr auto nr_blocks = 3;
-  constexpr auto last_block_index = 2 << 6;
+  auto last_block_index = (nr_blocks - 1) << 6;
 
   GstBufferList *final_packets = gst_buffer_list_new(); // we'll increase the size on each block iteration
 
@@ -330,14 +353,19 @@ static GstBufferList *split_into_rtp(gst_rtp_moonlight_pay_video *rtpmoonlightpa
 
   if (rtpmoonlightpay->fec_percentage > 0) {
     auto rtp_packets_size = gst_buffer_list_length(rtp_packets);
-    auto blocks = determine_split(*rtpmoonlightpay, rtp_packets_size);
+    auto nr_blocks = required_fec_blocks(*rtpmoonlightpay, rtp_packets_size);
 
-    // With a fec_percentage of 255, if payload is broken up into more than a 100 data_shards
-    // it will generate greater than DATA_SHARDS_MAX shards and FEC will fail to encode.
-    if (blocks.data_shards > 90) {
-      rtp_packets = generate_fec_multi_blocks(rtpmoonlightpay, rtp_packets, blocks.data_shards, inbuf);
-    } else {
+    if (nr_blocks > 1) {
+      rtp_packets = generate_fec_multi_blocks(rtpmoonlightpay, rtp_packets, rtp_packets_size, inbuf, nr_blocks);
+    } else if (nr_blocks == 1) {
       generate_fec_packets(*rtpmoonlightpay, rtp_packets, inbuf, 0, 0);
+      rtpmoonlightpay->cur_seq_number += gst_buffer_list_length(rtp_packets);
+    } else {
+      logs::log(logs::warning,
+                "[GSTREAMER] Frame has {} data packets and cannot fit into four {}-shard FEC blocks; sending without "
+                "FEC",
+                rtp_packets_size,
+                DATA_SHARDS_MAX);
       rtpmoonlightpay->cur_seq_number += gst_buffer_list_length(rtp_packets);
     }
   }

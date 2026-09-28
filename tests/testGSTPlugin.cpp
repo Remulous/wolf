@@ -136,7 +136,8 @@ TEST_CASE_METHOD(GStreamerTestsFixture, "RTP VIDEO Splits", "[GSTPlugin]") {
     auto final_packets = gst_moonlight_video::generate_fec_multi_blocks(rtpmoonlightpay,
                                                                         rtp_packets_blocks,
                                                                         (int)payload_expected_packets,
-                                                                        payload_buf_blocks);
+                                                                        payload_buf_blocks,
+                                                                        3);
 
     REQUIRE(gst_buffer_list_length(final_packets) ==
             payload_expected_packets + fec_expected_packets - 1); // TODO: why one less?
@@ -153,6 +154,24 @@ TEST_CASE_METHOD(GStreamerTestsFixture, "RTP VIDEO Splits", "[GSTPlugin]") {
   g_object_unref(rtpmoonlightpay);
   REQUIRE(get_buf_refcount(payload_buf) == 1);
   gst_buffer_unref(payload_buf);
+}
+
+TEST_CASE_METHOD(GStreamerTestsFixture, "Video FEC block count respects the 255 shard limit", "[GSTPlugin]") {
+  auto rtpmoonlightpay = (gst_rtp_moonlight_pay_video *)g_object_new(gst_TYPE_rtp_moonlight_pay_video, nullptr);
+  rtpmoonlightpay->fec_percentage = 20;
+  rtpmoonlightpay->min_required_fec_packets = 2;
+
+  // 212 data + 43 parity shards fits exactly. The next data shard requires
+  // another FEC block because 213 + 43 would be 256.
+  REQUIRE(gst_moonlight_video::required_fec_blocks(*rtpmoonlightpay, 212) == 1);
+  REQUIRE(gst_moonlight_video::required_fec_blocks(*rtpmoonlightpay, 213) == 2);
+
+  // Four protocol blocks can carry 4 * 212 data shards at 20% FEC. Beyond
+  // that, the caller must fall back to a consistent no-FEC frame.
+  REQUIRE(gst_moonlight_video::required_fec_blocks(*rtpmoonlightpay, 848) == 4);
+  REQUIRE(gst_moonlight_video::required_fec_blocks(*rtpmoonlightpay, 849) == 0);
+
+  g_object_unref(rtpmoonlightpay);
 }
 
 TEST_CASE_METHOD(GStreamerTestsFixture, "Create RTP VIDEO packets", "[GSTPlugin]") {
