@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <control/control.hpp>
+
 using Catch::Matchers::Equals;
 
 #include <moonlight/control.hpp>
@@ -114,6 +116,32 @@ TEST_CASE("Control encryption preserves distinct sequence values", "[CONTROL]") 
   REQUIRE(boost::endian::little_to_native(first.seq) == 0);
   REQUIRE(boost::endian::little_to_native(second.seq) == 1);
   REQUIRE(to_string(first) != to_string(second));
+}
+
+TEST_CASE("Control session lookup retains an immutable client snapshot", "[CONTROL]") {
+  auto session = wolf::core::events::StreamSession{.enet_secret_payload = 17, .session_id = 42, .ip = "192.0.2.1"};
+  auto running_sessions = std::make_shared<immer::atom<immer::vector<wolf::core::events::StreamSession>>>(
+      immer::vector<wolf::core::events::StreamSession>{session});
+  control::enet_clients_map connected_clients;
+  ENetPeer peer{};
+
+  ENetEvent connect{};
+  connect.type = ENET_EVENT_TYPE_CONNECT;
+  connect.data = session.enet_secret_payload;
+  auto connecting_session = control::get_current_session(connected_clients, running_sessions, session.ip, connect);
+  REQUIRE(connecting_session);
+  REQUIRE(connecting_session->get().session_id == session.session_id);
+
+  connected_clients = connected_clients.set(&peer, connecting_session.value());
+  ENetEvent receive{};
+  receive.type = ENET_EVENT_TYPE_RECEIVE;
+  receive.peer = &peer;
+  auto established_session = control::get_current_session(connected_clients, running_sessions, session.ip, receive);
+  REQUIRE(established_session);
+
+  connected_clients = connected_clients.erase(&peer);
+  REQUIRE(established_session->get().session_id == session.session_id);
+  REQUIRE(established_session->get().aes_key == session.aes_key);
 }
 
 TEST_CASE("Input packet validation", "[CONTROL]") {

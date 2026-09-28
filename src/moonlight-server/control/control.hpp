@@ -5,8 +5,10 @@
 #include <events/events.hpp>
 #include <helpers/logger.hpp>
 #include <moonlight/control.hpp>
+#include <optional>
 #include <range/v3/view.hpp>
 #include <state/data-structures.hpp>
+#include <string_view>
 #include <thread>
 
 namespace control {
@@ -22,6 +24,11 @@ void run_control(int port,
                  const std::string &host_ip = "0.0.0.0");
 
 using enet_clients_map = immer::map<ENetPeer *, immer::box<events::StreamSession>>;
+
+std::optional<immer::box<events::StreamSession>> get_current_session(const enet_clients_map &connected_clients,
+                                                                     const state::SessionsAtoms &running_sessions,
+                                                                     std::string_view client_ip,
+                                                                     const ENetEvent &enet_event);
 
 std::shared_ptr<ENetPeer> to_shared_ptr(ENetPeer *peer);
 

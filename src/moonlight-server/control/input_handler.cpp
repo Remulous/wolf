@@ -214,7 +214,7 @@ std::shared_ptr<events::JoypadTypes> create_new_joypad(const events::StreamSessi
  * Creates a new PenTablet and saves it into the session;
  * will also trigger a PlugDeviceEvent
  */
-bool create_pen_tablet(events::StreamSession &session) {
+bool create_pen_tablet(const events::StreamSession &session) {
   logs::log(logs::debug, "[INPUT] Creating new pen tablet");
   auto tablet = PenTablet::create();
   if (!tablet) {
@@ -239,7 +239,7 @@ bool create_pen_tablet(events::StreamSession &session) {
  * Creates a new Touch screen and saves it into the session;
  * will also trigger a PlugDeviceEvent
  */
-bool create_touch_screen(events::StreamSession &session) {
+bool create_touch_screen(const events::StreamSession &session) {
   logs::log(logs::debug, "[INPUT] Creating new touch screen");
   auto touch = TouchScreen::create();
   if (!touch) {
@@ -268,7 +268,7 @@ static inline float deg2rad(float degree) {
   return degree * (M_PI / 180.f);
 }
 
-void mouse_move_rel(const MOUSE_MOVE_REL_PACKET &pkt, events::StreamSession &session) {
+void mouse_move_rel(const MOUSE_MOVE_REL_PACKET &pkt, const events::StreamSession &session) {
   if (session.mouse->has_value()) {
     auto pointer_acceleration = session.client_settings->mouse_acceleration;
     auto delta_x = static_cast<float>(boost::endian::big_to_native(pkt.delta_x)) * pointer_acceleration;
@@ -279,7 +279,7 @@ void mouse_move_rel(const MOUSE_MOVE_REL_PACKET &pkt, events::StreamSession &ses
   }
 }
 
-void mouse_move_abs(const MOUSE_MOVE_ABS_PACKET &pkt, events::StreamSession &session) {
+void mouse_move_abs(const MOUSE_MOVE_ABS_PACKET &pkt, const events::StreamSession &session) {
   if (session.mouse->has_value()) {
     auto pointer_acceleration = session.client_settings->mouse_acceleration;
     float x = boost::endian::big_to_native(pkt.x);
@@ -301,7 +301,7 @@ void mouse_move_abs(const MOUSE_MOVE_ABS_PACKET &pkt, events::StreamSession &ses
   }
 }
 
-void mouse_button(const MOUSE_BUTTON_PACKET &pkt, events::StreamSession &session) {
+void mouse_button(const MOUSE_BUTTON_PACKET &pkt, const events::StreamSession &session) {
   if (session.mouse->has_value()) {
     if (std::holds_alternative<state::input::Mouse>(session.mouse->value())) {
       Mouse::MOUSE_BUTTON btn_type;
@@ -340,7 +340,7 @@ void mouse_button(const MOUSE_BUTTON_PACKET &pkt, events::StreamSession &session
   }
 }
 
-void mouse_scroll(const MOUSE_SCROLL_PACKET &pkt, events::StreamSession &session) {
+void mouse_scroll(const MOUSE_SCROLL_PACKET &pkt, const events::StreamSession &session) {
   if (session.mouse->has_value()) {
     std::visit(
         [session, scroll_amount = boost::endian::big_to_native(pkt.scroll_amt1)](auto &mouse) {
@@ -353,7 +353,7 @@ void mouse_scroll(const MOUSE_SCROLL_PACKET &pkt, events::StreamSession &session
   }
 }
 
-void mouse_h_scroll(const MOUSE_HSCROLL_PACKET &pkt, events::StreamSession &session) {
+void mouse_h_scroll(const MOUSE_HSCROLL_PACKET &pkt, const events::StreamSession &session) {
   if (session.mouse->has_value()) {
     std::visit(
         [session, scroll_amount = boost::endian::big_to_native(pkt.scroll_amount)](auto &mouse) {
@@ -388,7 +388,7 @@ static char modifier_bit(short moonlight_key) {
   }
 }
 
-void keyboard_key(const KEYBOARD_PACKET &pkt, events::StreamSession &session) {
+void keyboard_key(const KEYBOARD_PACKET &pkt, const events::StreamSession &session) {
   // moonlight always sets the high bit; not sure why but mask it off here
   short moonlight_key = (short)boost::endian::little_to_native(pkt.key_code) & (short)0x7fff;
 
@@ -461,7 +461,7 @@ void keyboard_key(const KEYBOARD_PACKET &pkt, events::StreamSession &session) {
   }
 }
 
-void utf8_text(const UTF8_TEXT_PACKET &pkt, events::StreamSession &session) {
+void utf8_text(const UTF8_TEXT_PACKET &pkt, const events::StreamSession &session) {
   if (session.keyboard->has_value()) {
     /* Here we receive a single UTF-8 encoded char at a time,
      * the trick is to convert it to UTF-32 then send CTRL+SHIFT+U+<HEXCODE> in order to produce any
@@ -484,7 +484,7 @@ void utf8_text(const UTF8_TEXT_PACKET &pkt, events::StreamSession &session) {
   }
 }
 
-void touch(const TOUCH_PACKET &pkt, events::StreamSession &session) {
+void touch(const TOUCH_PACKET &pkt, const events::StreamSession &session) {
   bool has_touch_device = session.touch_screen->has_value();
   if (!has_touch_device) {
     has_touch_device = create_touch_screen(session);
@@ -556,7 +556,7 @@ void touch(const TOUCH_PACKET &pkt, events::StreamSession &session) {
   }
 }
 
-void pen(const PEN_PACKET &pkt, events::StreamSession &session) {
+void pen(const PEN_PACKET &pkt, const events::StreamSession &session) {
   bool has_pen_device = session.pen_tablet->has_value();
   if (!has_pen_device) {
     create_pen_tablet(session);
@@ -619,7 +619,7 @@ void pen(const PEN_PACKET &pkt, events::StreamSession &session) {
 }
 
 void controller_arrival(const CONTROLLER_ARRIVAL_PACKET &pkt,
-                        events::StreamSession &session,
+                        const events::StreamSession &session,
                         immer::box<std::shared_ptr<ENetPeer>> connected_client) {
   auto joypads = session.joypads->load();
   if (joypads->find(pkt.controller_number)) {
@@ -637,7 +637,7 @@ void controller_arrival(const CONTROLLER_ARRIVAL_PACKET &pkt,
 }
 
 void controller_multi(const CONTROLLER_MULTI_PACKET &pkt,
-                      events::StreamSession &session,
+                      const events::StreamSession &session,
                       immer::box<std::shared_ptr<ENetPeer>> connected_client) {
   auto joypads = session.joypads->load();
   std::shared_ptr<events::JoypadTypes> selected_pad;
@@ -685,7 +685,7 @@ void controller_multi(const CONTROLLER_MULTI_PACKET &pkt,
   }
 }
 
-void controller_touch(const CONTROLLER_TOUCH_PACKET &pkt, events::StreamSession &session) {
+void controller_touch(const CONTROLLER_TOUCH_PACKET &pkt, const events::StreamSession &session) {
   auto joypads = session.joypads->load();
   std::shared_ptr<events::JoypadTypes> selected_pad;
   if (auto joypad = joypads->find(pkt.controller_number)) {
@@ -723,7 +723,7 @@ void controller_touch(const CONTROLLER_TOUCH_PACKET &pkt, events::StreamSession 
   }
 }
 
-void controller_motion(const CONTROLLER_MOTION_PACKET &pkt, events::StreamSession &session) {
+void controller_motion(const CONTROLLER_MOTION_PACKET &pkt, const events::StreamSession &session) {
   auto joypads = session.joypads->load();
   std::shared_ptr<events::JoypadTypes> selected_pad;
   if (auto joypad = joypads->find(pkt.controller_number)) {
@@ -743,7 +743,7 @@ void controller_motion(const CONTROLLER_MOTION_PACKET &pkt, events::StreamSessio
   }
 }
 
-void controller_battery(const CONTROLLER_BATTERY_PACKET &pkt, events::StreamSession &session) {
+void controller_battery(const CONTROLLER_BATTERY_PACKET &pkt, const events::StreamSession &session) {
   auto joypads = session.joypads->load();
   std::shared_ptr<events::JoypadTypes> selected_pad;
   if (auto joypad = joypads->find(pkt.controller_number)) {
@@ -774,7 +774,7 @@ void controller_battery(const CONTROLLER_BATTERY_PACKET &pkt, events::StreamSess
   }
 }
 
-void handle_input(events::StreamSession &session,
+void handle_input(const events::StreamSession &session,
                   immer::box<std::shared_ptr<ENetPeer>> connected_client,
                   INPUT_PKT *pkt) {
   switch (pkt->type) {
