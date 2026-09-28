@@ -340,6 +340,18 @@ struct ControlFrameFecStatusPacket {
   std::uint8_t multi_fec_block_count;
 };
 
+// Legacy Moonlight loss report. The client sends the most recently completed
+// frame along with a nominal reporting interval. All fields are little-endian.
+struct ControlLossStatsPacket {
+  ControlPacket header;
+  std::uint32_t reserved1;
+  std::uint32_t reporting_interval_ms;
+  std::uint32_t network_rate;
+  std::uint64_t last_good_frame;
+  std::uint32_t reserved2[2];
+  std::uint32_t fec_percentage;
+};
+
 // The INVALIDATE_REF_FRAMES payload is six little-endian 32-bit values.
 struct ControlInvalidateReferenceFramesPacket {
   ControlPacket header;
@@ -352,6 +364,7 @@ struct ControlInvalidateReferenceFramesPacket {
 #pragma pack(pop)
 
 static_assert(sizeof(ControlFrameFecStatusPacket) == sizeof(ControlPacket) + 21);
+static_assert(sizeof(ControlLossStatsPacket) == sizeof(ControlPacket) + 32);
 static_assert(sizeof(ControlInvalidateReferenceFramesPacket) == sizeof(ControlPacket) + 24);
 
 struct ControlRumblePacket {
@@ -519,6 +532,13 @@ static bool is_valid_frame_fec_status_packet(std::string_view packet) {
     return false;
   }
   return reinterpret_cast<const ControlPacket *>(packet.data())->type == pkts::FRAME_FEC_STATUS;
+}
+
+static bool is_valid_loss_stats_packet(std::string_view packet) {
+  if (!is_valid_control_packet(packet) || packet.size() != sizeof(ControlLossStatsPacket)) {
+    return false;
+  }
+  return reinterpret_cast<const ControlPacket *>(packet.data())->type == pkts::LOSS_STATS;
 }
 
 static bool is_valid_reference_frame_invalidation_packet(std::string_view packet) {

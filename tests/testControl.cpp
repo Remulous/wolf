@@ -135,6 +135,14 @@ TEST_CASE("Video feedback control packet validation", "[CONTROL]") {
   REQUIRE(is_valid_frame_fec_status_packet(status_bytes));
   REQUIRE_FALSE(is_valid_frame_fec_status_packet(status_bytes.substr(0, status_bytes.size() - 1)));
 
+  ControlLossStatsPacket loss_stats{};
+  loss_stats.header = {.type = pkts::LOSS_STATS,
+                       .length = boost::endian::native_to_little(
+                           static_cast<std::uint16_t>(sizeof(ControlLossStatsPacket) - sizeof(ControlPacket)))};
+  std::string loss_stats_bytes(reinterpret_cast<const char *>(&loss_stats), sizeof(loss_stats));
+  REQUIRE(is_valid_loss_stats_packet(loss_stats_bytes));
+  REQUIRE_FALSE(is_valid_loss_stats_packet(loss_stats_bytes.substr(0, loss_stats_bytes.size() - 1)));
+
   ControlInvalidateReferenceFramesPacket invalidation{};
   invalidation.header = {.type = pkts::INVALIDATE_REF_FRAMES,
                          .length = boost::endian::native_to_little(static_cast<std::uint16_t>(
