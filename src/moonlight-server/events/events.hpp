@@ -256,6 +256,7 @@ struct VideoSession {
   int frames_with_invalid_ref_threshold;
   int fec_percentage;
   int min_required_fec_packets;
+  bool adaptive_fec;
   long bitrate_kbps;
   int slices_per_frame;
 
@@ -288,6 +289,23 @@ struct AudioSession {
 struct IDRRequestEvent {
   // A unique ID that identifies this session
   std::size_t session_id;
+};
+
+struct VideoFecStatusEvent {
+  std::size_t session_id;
+  std::uint32_t frame_index;
+  std::uint16_t missing_packets;
+  std::uint16_t total_data_packets;
+  std::uint16_t total_parity_packets;
+  std::uint16_t received_data_packets;
+  std::uint16_t received_parity_packets;
+  std::uint8_t fec_percentage;
+};
+
+struct ReferenceFrameInvalidationEvent {
+  std::size_t session_id;
+  std::uint32_t first_frame_index;
+  std::uint32_t last_frame_index;
 };
 
 struct PauseStreamEvent {
@@ -352,6 +370,8 @@ using EventBusHandlers = dp::handler_registration<immer::box<PlugDeviceEvent>,
                                                   immer::box<VideoSession>,
                                                   immer::box<AudioSession>,
                                                   immer::box<IDRRequestEvent>,
+                                                  immer::box<VideoFecStatusEvent>,
+                                                  immer::box<ReferenceFrameInvalidationEvent>,
                                                   immer::box<PauseStreamEvent>,
                                                   immer::box<ResumeStreamEvent>,
                                                   immer::box<StopStreamEvent>,
@@ -373,6 +393,8 @@ using EventBusType = dp::event_bus<immer::box<PlugDeviceEvent>,
                                    immer::box<VideoSession>,
                                    immer::box<AudioSession>,
                                    immer::box<IDRRequestEvent>,
+                                   immer::box<VideoFecStatusEvent>,
+                                   immer::box<ReferenceFrameInvalidationEvent>,
                                    immer::box<PauseStreamEvent>,
                                    immer::box<ResumeStreamEvent>,
                                    immer::box<StopStreamEvent>,
@@ -394,6 +416,8 @@ using EventsVariant = std::variant<immer::box<PlugDeviceEvent>,
                                    immer::box<VideoSession>,
                                    immer::box<AudioSession>,
                                    immer::box<IDRRequestEvent>,
+                                   immer::box<VideoFecStatusEvent>,
+                                   immer::box<ReferenceFrameInvalidationEvent>,
                                    immer::box<PauseStreamEvent>,
                                    immer::box<ResumeStreamEvent>,
                                    immer::box<StopStreamEvent>,

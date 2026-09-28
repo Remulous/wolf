@@ -28,6 +28,9 @@ enum PACKET_TYPE : std::uint16_t {
   RUMBLE_TRIGGERS = boost::endian::little_to_native(0x5500),
   MOTION_EVENT = boost::endian::little_to_native(0x5501),
   RGB_LED_EVENT = boost::endian::little_to_native(0x5502),
+  // Client-to-host Sunshine extension. This intentionally shares its numeric
+  // value with RGB_LED_EVENT, which is used in the opposite direction.
+  FRAME_FEC_STATUS = boost::endian::little_to_native(0x5502),
   ADAPTIVE_TRIGGER_EVENT = boost::endian::little_to_native(0x5503),
 };
 
@@ -319,6 +322,38 @@ struct ControlTerminatePacket {
   std::uint32_t reason = TERMINATE_REASON_GRACEFULL;
 };
 
+#pragma pack(push, 1)
+
+// Sunshine extension. All multi-byte fields are big-endian on the wire.
+struct ControlFrameFecStatusPacket {
+  ControlPacket header;
+  std::uint32_t frame_index;
+  std::uint16_t highest_received_sequence_number;
+  std::uint16_t next_contiguous_sequence_number;
+  std::uint16_t missing_packets_before_highest_received;
+  std::uint16_t total_data_packets;
+  std::uint16_t total_parity_packets;
+  std::uint16_t received_data_packets;
+  std::uint16_t received_parity_packets;
+  std::uint8_t fec_percentage;
+  std::uint8_t multi_fec_block_index;
+  std::uint8_t multi_fec_block_count;
+};
+
+// The INVALIDATE_REF_FRAMES payload is six little-endian 32-bit values.
+struct ControlInvalidateReferenceFramesPacket {
+  ControlPacket header;
+  std::uint32_t first_frame_index;
+  std::uint32_t reserved1;
+  std::uint32_t last_frame_index;
+  std::uint32_t reserved2[3];
+};
+
+#pragma pack(pop)
+
+static_assert(sizeof(ControlFrameFecStatusPacket) == sizeof(ControlPacket) + 21);
+static_assert(sizeof(ControlInvalidateReferenceFramesPacket) == sizeof(ControlPacket) + 24);
+
 struct ControlRumblePacket {
   ControlPacket header;
 
@@ -479,6 +514,20 @@ static bool is_valid_input_packet(std::string_view packet) {
   }
 }
 
+static bool is_valid_frame_fec_status_packet(std::string_view packet) {
+  if (!is_valid_control_packet(packet) || packet.size() != sizeof(ControlFrameFecStatusPacket)) {
+    return false;
+  }
+  return reinterpret_cast<const ControlPacket *>(packet.data())->type == pkts::FRAME_FEC_STATUS;
+}
+
+static bool is_valid_reference_frame_invalidation_packet(std::string_view packet) {
+  if (!is_valid_control_packet(packet) || packet.size() != sizeof(ControlInvalidateReferenceFramesPacket)) {
+    return false;
+  }
+  return reinterpret_cast<const ControlPacket *>(packet.data())->type == pkts::INVALIDATE_REF_FRAMES;
+}
+
 /**
  * Given a received packet will decrypt the payload inside it.
  * This includes checking that the AES GCM TAG is valid and not tampered
@@ -549,7 +598,7 @@ static constexpr const char *packet_type_to_str(pkts::PACKET_TYPE p) noexcept {
   case pkts::MOTION_EVENT:
     return "MOTION_EVENT";
   case pkts::RGB_LED_EVENT:
-    return "RGB_LED_EVENT";
+    return "RGB_LED_EVENT/FRAME_FEC_STATUS";
   case pkts::ADAPTIVE_TRIGGER_EVENT:
     return "ADAPTIVE_TRIGGER_EVENT";
   }

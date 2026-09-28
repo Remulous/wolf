@@ -199,7 +199,9 @@ namespace custom_sink {
 
 struct PacingConfig {
   bool enabled = false;
+  std::uint64_t encoder_bitrate_bps = 0;
   std::uint64_t bitrate_bps = 0;
+  std::size_t packet_size = 1;
   /**
    * Maximum number of packets per sendmmsg() syscall.
    * This is also capped to roughly 1 ms of traffic so a batch does not become
@@ -213,8 +215,32 @@ struct UDPSink {
   std::shared_ptr<udp::socket> socket;
   std::shared_ptr<udp::endpoint> client_endpoint;
   PacingConfig pacing;
+  std::shared_ptr<AdaptiveFecController> adaptive_fec;
+  gst_element_ptr video_payloader;
+  int active_fec_percentage = 0;
   wolf::platform::batched_send_info_t send_info;
 };
+
+static std::uint64_t pacing_bitrate(std::uint64_t encoder_bitrate_bps, int fec_percentage) {
+  return encoder_bitrate_bps * static_cast<std::uint64_t>(100 + std::max(0, fec_percentage)) * 125 / 100 / 100;
+}
+
+static void apply_adaptive_fec_for_next_frame(UDPSink *udp_sink) {
+  if (!udp_sink->adaptive_fec || !udp_sink->video_payloader) {
+    return;
+  }
+  const auto desired_fec = udp_sink->adaptive_fec->desired_percentage();
+  if (desired_fec == udp_sink->active_fec_percentage) {
+    return;
+  }
+
+  logs::log(logs::debug,
+            "[GSTREAMER] Adjusting video FEC from {}% to {}%",
+            udp_sink->active_fec_percentage,
+            desired_fec);
+  g_object_set(udp_sink->video_payloader.get(), "fec_percentage", desired_fec, nullptr);
+  udp_sink->active_fec_percentage = desired_fec;
+}
 
 static void ensure_socket_open(UDPSink *udp_sink, bool is_video) {
   if (!udp_sink->socket->is_open()) {
@@ -265,6 +291,9 @@ static GstFlowReturn send_buffer_batched(GstBufferList *buffer_list, UDPSink *ud
     success = wolf::platform::send_batch(udp_sink->send_info);
   } else {
     auto &pacing = udp_sink->pacing;
+    pacing.bitrate_bps = pacing_bitrate(pacing.encoder_bitrate_bps, udp_sink->active_fec_percentage);
+    const auto packets_per_ms = std::max<std::uint64_t>(1, pacing.bitrate_bps / 1000 / (pacing.packet_size * 8));
+    pacing.max_batch_size = std::min<std::size_t>({16, 65536 / pacing.packet_size, packets_per_ms});
     auto next_send_time = std::max(pacing.next_send_time, std::chrono::steady_clock::now());
     std::size_t packets_sent = 0;
 
@@ -302,6 +331,11 @@ static GstFlowReturn send_buffer_batched(GstBufferList *buffer_list, UDPSink *ud
     logs::log(logs::warning, "Failed to send batch of {} packets", num_buffers);
     return GST_FLOW_ERROR;
   }
+
+  // The current list was produced with active_fec_percentage. Change the
+  // upstream payloader only after sending it so the next frame and its pacing
+  // budget switch percentages together.
+  apply_adaptive_fec_for_next_frame(udp_sink);
 
   return GST_FLOW_OK;
 }
@@ -362,6 +396,11 @@ static void configure_appsink(GstElement *appsink, UDPSink *udp_sink) {
 }
 } // namespace custom_sink
 
+static void force_idr(GstElement *pipeline) {
+  wolf::core::gstreamer::send_message(pipeline,
+                                      gst_structure_new("GstForceKeyUnit", "all-headers", G_TYPE_BOOLEAN, TRUE, NULL));
+}
+
 /**
  * Start VIDEO pipeline
  */
@@ -397,18 +436,23 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
   // 25% headroom so a normally-sized frame is delivered before the next frame
   // arrives without draining it at the old hard-coded 800 Mbps burst rate.
   auto encoder_bitrate_bps = static_cast<std::uint64_t>(std::max(1L, video_session->bitrate_kbps)) * 1000;
-  auto pacing_bitrate_bps = encoder_bitrate_bps * static_cast<std::uint64_t>(100 + video_session->fec_percentage) *
-                            125 / 100 / 100;
+  auto pacing_bitrate_bps = custom_sink::pacing_bitrate(encoder_bitrate_bps, video_session->fec_percentage);
   auto packet_size = static_cast<std::size_t>(std::max(1, video_session->packet_size));
   auto packets_per_ms = std::max<std::uint64_t>(1, pacing_bitrate_bps / 1000 / (packet_size * 8));
   std::shared_ptr<custom_sink::UDPSink> udp_sink = std::make_shared<custom_sink::UDPSink>(custom_sink::UDPSink{
       .socket = video_socket,
       .client_endpoint = std::make_shared<udp::endpoint>(boost::asio::ip::make_address(client_ip), client_port),
-      .pacing = {
-          .enabled = enable_pacing,
-          .bitrate_bps = pacing_bitrate_bps,
-          .max_batch_size = std::min<std::size_t>({16, 65536 / packet_size, packets_per_ms}),
-      }});
+      .pacing =
+          {
+              .enabled = enable_pacing,
+              .encoder_bitrate_bps = encoder_bitrate_bps,
+              .bitrate_bps = pacing_bitrate_bps,
+              .packet_size = packet_size,
+              .max_batch_size = std::min<std::size_t>({16, 65536 / packet_size, packets_per_ms}),
+          },
+      .adaptive_fec =
+          std::make_shared<AdaptiveFecController>(video_session->adaptive_fec, video_session->fec_percentage),
+      .active_fec_percentage = video_session->fec_percentage});
   std::shared_ptr<NeedContextData> ctx_data_ptr = std::make_shared<NeedContextData>(
       NeedContextData{.device_path = video_session->render_node, .gst_context = video_context});
   run_pipeline(pipeline, [video_session, event_bus, udp_sink, ctx_data_ptr](auto pipeline) {
@@ -417,6 +461,11 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
       g_assert(GST_IS_APP_SINK(app_sink_el));
       configure_appsink(app_sink_el, udp_sink.get());
       gst_object_unref(app_sink_el);
+    }
+    if (auto payloader = gst_bin_get_by_name(GST_BIN(pipeline.get()), "moonlight_pay")) {
+      udp_sink->video_payloader = gst_element_ptr(payloader, ::gst_object_unref);
+    } else if (video_session->adaptive_fec) {
+      logs::log(logs::warning, "[GSTREAMER] Adaptive FEC disabled: moonlight_pay element not found");
     }
 
     auto bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline.get()));
@@ -434,9 +483,29 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
             logs::log(logs::debug, "[GSTREAMER] Forcing IDR");
             // Force IDR event, see: https://github.com/centricular/gstwebrtc-demos/issues/186
             // https://gstreamer.freedesktop.org/documentation/additional/design/keyframe-force.html?gi-language=c
-            wolf::core::gstreamer::send_message(
-                pipeline.get(),
-                gst_structure_new("GstForceKeyUnit", "all-headers", G_TYPE_BOOLEAN, TRUE, NULL));
+            force_idr(pipeline.get());
+          }
+        });
+
+    auto fec_status_handler = event_bus->register_handler<immer::box<events::VideoFecStatusEvent>>(
+        [sess_id = video_session->session_id,
+         controller = udp_sink->adaptive_fec](const immer::box<events::VideoFecStatusEvent> &status) {
+          if (status->session_id == sess_id) {
+            controller->report(*status);
+          }
+        });
+
+    auto invalidate_handler = event_bus->register_handler<immer::box<events::ReferenceFrameInvalidationEvent>>(
+        [sess_id = video_session->session_id,
+         pipeline](const immer::box<events::ReferenceFrameInvalidationEvent> &request) {
+          if (request->session_id == sess_id) {
+            // GStreamer has no codec-agnostic reference-frame invalidation API.
+            // Preserve correct recovery behavior by falling back to an IDR.
+            logs::log(logs::debug,
+                      "[GSTREAMER] Reference-frame invalidation requested for {}-{}; forcing IDR fallback",
+                      request->first_frame_index,
+                      request->last_frame_index);
+            force_idr(pipeline.get());
           }
         });
 
@@ -492,6 +561,8 @@ void start_streaming_video(immer::box<events::VideoSession> video_session,
         });
 
     return immer::array<immer::box<events::EventBusHandlers>>{std::move(idr_handler),
+                                                              std::move(fec_status_handler),
+                                                              std::move(invalidate_handler),
                                                               std::move(pause_handler),
                                                               std::move(switch_producer_handler),
                                                               std::move(stop_handler)};

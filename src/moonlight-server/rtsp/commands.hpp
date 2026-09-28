@@ -231,6 +231,7 @@ announce(const RTSP_PACKET &req, const events::StreamSession &session) {
       // Moonlight clients always send minRequiredFecPackets=2 (moonlight-common-c/SdpGenerator.c)
       // to ensure small frames (1-2 data packets) get at least 2 FEC parity packets for recovery
       .min_required_fec_packets = args["x-nv-vqos[0].fec.minRequiredFecPackets"].value_or(2),
+      .adaptive_fec = (args["x-ml-general.featureFlags"].value_or(0) & static_cast<int>(ML_FF_FEC_STATUS)) != 0,
       .bitrate_kbps = bitrate,
       .slices_per_frame = args["x-nv-video[0].videoEncoderSlicesPerFrame"].value_or(1),
 

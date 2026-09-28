@@ -125,3 +125,22 @@ TEST_CASE("Input packet validation", "[CONTROL]") {
   truncated_input.resize(sizeof(pkts::INPUT_PKT));
   REQUIRE_FALSE(is_valid_input_packet(truncated_input));
 }
+
+TEST_CASE("Video feedback control packet validation", "[CONTROL]") {
+  ControlFrameFecStatusPacket status{};
+  status.header = {.type = pkts::FRAME_FEC_STATUS,
+                   .length = boost::endian::native_to_little(
+                       static_cast<std::uint16_t>(sizeof(ControlFrameFecStatusPacket) - sizeof(ControlPacket)))};
+  std::string status_bytes(reinterpret_cast<const char *>(&status), sizeof(status));
+  REQUIRE(is_valid_frame_fec_status_packet(status_bytes));
+  REQUIRE_FALSE(is_valid_frame_fec_status_packet(status_bytes.substr(0, status_bytes.size() - 1)));
+
+  ControlInvalidateReferenceFramesPacket invalidation{};
+  invalidation.header = {.type = pkts::INVALIDATE_REF_FRAMES,
+                         .length = boost::endian::native_to_little(static_cast<std::uint16_t>(
+                             sizeof(ControlInvalidateReferenceFramesPacket) - sizeof(ControlPacket)))};
+  std::string invalidation_bytes(reinterpret_cast<const char *>(&invalidation), sizeof(invalidation));
+  REQUIRE(is_valid_reference_frame_invalidation_packet(invalidation_bytes));
+  REQUIRE_FALSE(
+      is_valid_reference_frame_invalidation_packet(invalidation_bytes.substr(0, invalidation_bytes.size() - 1)));
+}

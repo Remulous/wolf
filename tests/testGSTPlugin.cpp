@@ -9,6 +9,7 @@ using Catch::Matchers::Equals;
 #include <gst-plugin/audio.hpp>
 #include <gst-plugin/video.hpp>
 #include <moonlight/fec.hpp>
+#include <streaming/streaming.hpp>
 #include <string>
 
 using namespace std::string_literals;
@@ -142,18 +143,127 @@ TEST_CASE_METHOD(GStreamerTestsFixture, "RTP VIDEO Splits", "[GSTPlugin]") {
     REQUIRE(gst_buffer_list_length(final_packets) ==
             payload_expected_packets + fec_expected_packets - 1); // TODO: why one less?
 
-    auto first_payload = gst_buffer_copy_content(gst_buffer_list_get(rtp_packets, 0), rtp_header_size);
-    REQUIRE_THAT(
-        std::string(first_payload.begin() + sizeof(gst_moonlight_video::VideoShortHeader), first_payload.end()),
-        Equals("Never go"));
+    auto first_payload = gst_buffer_copy_content(gst_buffer_list_get(final_packets, 0), rtp_header_size);
+    REQUIRE_THAT(std::string(first_payload.begin(), first_payload.end()), Equals(payload_str.substr(0, 16)));
     // TODO: proper check content and FEC
+    gst_buffer_list_unref(final_packets);
+    gst_buffer_unref(payload_buf_blocks);
   }
 
   /* Cleanup */
   REQUIRE(GST_OBJECT_REFCOUNT(rtpmoonlightpay) == 1);
   g_object_unref(rtpmoonlightpay);
+  gst_buffer_list_unref(rtp_packets);
   REQUIRE(get_buf_refcount(payload_buf) == 1);
   gst_buffer_unref(payload_buf);
+}
+
+TEST_CASE_METHOD(GStreamerTestsFixture, "Multi-block video FEC has recoverable block boundaries", "[GSTPlugin]") {
+  auto rtpmoonlightpay = (gst_rtp_moonlight_pay_video *)g_object_new(gst_TYPE_rtp_moonlight_pay_video, nullptr);
+  rtpmoonlightpay->payload_size = MAX_RTP_HEADER_SIZE + 10;
+  rtpmoonlightpay->fec_percentage = 50;
+  rtpmoonlightpay->min_required_fec_packets = 2;
+
+  auto payload = gst_buffer_new_and_fill(60, 0x5a);
+  GST_BUFFER_PTS(payload) = 2 * GST_SECOND;
+  auto packets = gst_moonlight_video::generate_rtp_packets(*rtpmoonlightpay, payload);
+  REQUIRE(gst_buffer_list_length(packets) == 6);
+
+  auto final_packets = gst_moonlight_video::generate_fec_multi_blocks(rtpmoonlightpay, packets, 6, payload, 3);
+  REQUIRE(gst_buffer_list_length(final_packets) == 12);
+
+  for (int block = 0; block < 3; ++block) {
+    const auto block_offset = block * 4;
+    auto first = gst_buffer_copy_content(gst_buffer_list_get(final_packets, block_offset));
+    auto last = gst_buffer_copy_content(gst_buffer_list_get(final_packets, block_offset + 1));
+    const auto *first_header = reinterpret_cast<const gst_moonlight_video::VideoRTPHeaders *>(first.data());
+    const auto *last_header = reinterpret_cast<const gst_moonlight_video::VideoRTPHeaders *>(last.data());
+
+    REQUIRE(first_header->packet.flags == (FLAG_CONTAINS_PIC_DATA | FLAG_SOF));
+    REQUIRE(last_header->packet.flags == (FLAG_CONTAINS_PIC_DATA | FLAG_EOF));
+    REQUIRE(first_header->packet.multiFecBlocks == ((block << 4) | (2 << 6)));
+    REQUIRE(last_header->packet.multiFecBlocks == ((block << 4) | (2 << 6)));
+    REQUIRE(first_header->packet.streamPacketIndex == static_cast<std::uint32_t>(block_offset << 8));
+    REQUIRE(last_header->packet.streamPacketIndex == static_cast<std::uint32_t>((block_offset + 1) << 8));
+    REQUIRE(boost::endian::big_to_native(first_header->rtp.timestamp) == 180000);
+    REQUIRE(boost::endian::big_to_native(last_header->rtp.timestamp) == 180000);
+  }
+
+  gst_buffer_list_unref(final_packets);
+  gst_buffer_unref(payload);
+  g_object_unref(rtpmoonlightpay);
+}
+
+TEST_CASE_METHOD(GStreamerTestsFixture, "Video RTP timestamps use the 90 kHz clock", "[GSTPlugin]") {
+  auto rtpmoonlightpay = (gst_rtp_moonlight_pay_video *)g_object_new(gst_TYPE_rtp_moonlight_pay_video, nullptr);
+  rtpmoonlightpay->payload_size = MAX_RTP_HEADER_SIZE + 10;
+  auto payload = gst_buffer_new_and_fill(20, 0x01);
+  GST_BUFFER_PTS(payload) = GST_SECOND + GST_SECOND / 2;
+
+  auto packets = gst_moonlight_video::generate_rtp_packets(*rtpmoonlightpay, payload);
+  REQUIRE(gst_buffer_list_length(packets) == 2);
+  for (guint i = 0; i < gst_buffer_list_length(packets); ++i) {
+    auto bytes = gst_buffer_copy_content(gst_buffer_list_get(packets, i));
+    const auto *header = reinterpret_cast<const gst_moonlight_video::VideoRTPHeaders *>(bytes.data());
+    REQUIRE(boost::endian::big_to_native(header->rtp.timestamp) == 135000);
+  }
+
+  gst_buffer_list_unref(packets);
+  gst_buffer_unref(payload);
+  g_object_unref(rtpmoonlightpay);
+}
+
+TEST_CASE_METHOD(GStreamerTestsFixture, "Video sequence advances when FEC is disabled", "[GSTPlugin]") {
+  auto rtpmoonlightpay = (gst_rtp_moonlight_pay_video *)g_object_new(gst_TYPE_rtp_moonlight_pay_video, nullptr);
+  rtpmoonlightpay->payload_size = MAX_RTP_HEADER_SIZE + 10;
+  rtpmoonlightpay->fec_percentage = 0;
+  auto payload = gst_buffer_new_and_fill(12, 0x01);
+
+  auto first = gst_moonlight_video::split_into_rtp(rtpmoonlightpay, payload);
+  const auto first_count = gst_buffer_list_length(first);
+  REQUIRE(rtpmoonlightpay->cur_seq_number == first_count);
+  auto second = gst_moonlight_video::split_into_rtp(rtpmoonlightpay, payload);
+  auto bytes = gst_buffer_copy_content(gst_buffer_list_get(second, 0));
+  const auto *header = reinterpret_cast<const gst_moonlight_video::VideoRTPHeaders *>(bytes.data());
+  REQUIRE(boost::endian::big_to_native(header->rtp.sequenceNumber) == first_count);
+
+  gst_buffer_list_unref(first);
+  gst_buffer_list_unref(second);
+  gst_buffer_unref(payload);
+  g_object_unref(rtpmoonlightpay);
+}
+
+TEST_CASE("Adaptive video FEC raises on loss and decays on clean feedback", "[Streaming]") {
+  using clock = streaming::AdaptiveFecController::clock;
+  const auto start = clock::time_point{};
+  streaming::AdaptiveFecController controller(true, 20, start);
+
+  REQUIRE(controller.desired_percentage() == 20);
+
+  const wolf::core::events::VideoFecStatusEvent clean{
+      .missing_packets = 0,
+      .total_data_packets = 80,
+      .total_parity_packets = 20,
+  };
+  controller.report(clean, start + std::chrono::seconds(5));
+  REQUIRE(controller.desired_percentage() == 15);
+  controller.report(clean, start + std::chrono::seconds(10));
+  REQUIRE(controller.desired_percentage() == 10);
+
+  controller.report(
+      wolf::core::events::VideoFecStatusEvent{
+          .missing_packets = 20,
+          .total_data_packets = 80,
+          .total_parity_packets = 20,
+      },
+      start + std::chrono::seconds(11));
+  REQUIRE(controller.desired_percentage() == 45);
+  controller.report(clean, start + std::chrono::seconds(16));
+  REQUIRE(controller.desired_percentage() == 40);
+
+  streaming::AdaptiveFecController disabled(false, 20, start);
+  disabled.report(clean, start + std::chrono::hours(1));
+  REQUIRE(disabled.desired_percentage() == 20);
 }
 
 TEST_CASE_METHOD(GStreamerTestsFixture, "Video FEC block count respects the 255 shard limit", "[GSTPlugin]") {
