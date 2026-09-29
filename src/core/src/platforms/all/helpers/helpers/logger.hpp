@@ -137,6 +137,7 @@ template <typename MessageFactory> inline bool log_lazy(severity_level lvl, Mess
     boost::log::record_ostream stream(record);
     stream << std::forward<MessageFactory>(message_factory)();
     stream.flush();
+    my_logger::get().push_record(std::move(record));
     return true;
   } catch (const std::exception &e) {
     std::cout << "Failed to produce log message: " << e.what();
