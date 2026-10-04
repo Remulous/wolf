@@ -103,8 +103,9 @@ jobs:
           cacheFrom: ${{ env.REGISTRY_IMAGE }}:buildcache
           push: never
           runCmd: |
-            cmake -Bbuild \
-                  -H$GITHUB_WORKSPACE \
+            set -euo pipefail
+
+            cmake -S . -B build \
                   -DCMAKE_BUILD_TYPE=Debug \
                   -DCMAKE_CXX_STANDARD=20 \
                   -DCMAKE_CXX_EXTENSIONS=OFF \
@@ -117,5 +118,5 @@ jobs:
                   -DTEST_UHID=OFF \
                   -G Ninja
 
-            ninja -C build -j $(nproc) wolftests
-            cd build/tests && ./wolftests
+            cmake --build build --target wolftests --parallel "$(nproc)"
+            ./build/tests/wolftests
