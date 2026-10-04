@@ -54,7 +54,7 @@ jobs:
           context: docker/
           file: docker/gpu-drivers.Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/gpu-drivers:2025.05
+          tags: ghcr.io/remulous/gpu-drivers:2025.05
           cache-from: type=gha,scope=gpu-drivers
           cache-to: type=gha,mode=max,scope=gpu-drivers
 
@@ -66,8 +66,8 @@ jobs:
           push: true
           build-args: |
             GSTREAMER_VERSION=1.26.7
-            BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/gpu-drivers:2025.05
-          tags: ghcr.io/${{ github.repository_owner }}/gstreamer:1.26.7
+            BASE_IMAGE=ghcr.io/remulous/gpu-drivers:2025.05
+          tags: ghcr.io/remulous/gstreamer:1.26.7
           cache-from: type=gha,scope=gstreamer
           cache-to: type=gha,mode=max,scope=gstreamer
 
@@ -81,7 +81,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/gstreamer:1.26.7
+            BASE_IMAGE=ghcr.io/remulous/gstreamer:1.26.7
             IMAGE_SOURCE=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=wolf
           cache-to: type=gha,mode=max,scope=wolf
