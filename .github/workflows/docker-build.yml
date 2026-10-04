@@ -24,6 +24,31 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Detect dependency image changes
+        id: dependencies
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] || \
+             [ -z "${BEFORE_SHA}" ] || \
+             [ "${BEFORE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "gpu=true" >> "$GITHUB_OUTPUT"
+            echo "gstreamer=true" >> "$GITHUB_OUTPUT"
+          else
+            if git diff --quiet "${BEFORE_SHA}" "${GITHUB_SHA}" -- docker/gpu-drivers.Dockerfile; then
+              echo "gpu=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "gpu=true" >> "$GITHUB_OUTPUT"
+            fi
+
+            if git diff --quiet "${BEFORE_SHA}" "${GITHUB_SHA}" -- \
+              docker/gpu-drivers.Dockerfile docker/gstreamer.Dockerfile; then
+              echo "gstreamer=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "gstreamer=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -49,6 +74,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build GPU Drivers
+        if: steps.dependencies.outputs.gpu == 'true'
         uses: docker/build-push-action@v6
         with:
           context: docker/
@@ -59,6 +85,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=gpu-drivers
 
       - name: Build Gstreamer
+        if: steps.dependencies.outputs.gstreamer == 'true'
         uses: docker/build-push-action@v6
         with:
           context: docker/
