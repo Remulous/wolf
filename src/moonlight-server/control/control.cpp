@@ -188,9 +188,9 @@ void run_control(int port,
         case ENET_EVENT_TYPE_DISCONNECT:
           logs::log(logs::debug, "[ENET] disconnected client: {}:{}", client_ip, client_port);
           connected_clients.update([peer = event.peer](const enet_clients_map &m) { return m.erase(peer); });
-          event_bus->fire_event(
-              immer::box<PauseStreamEvent>(PauseStreamEvent{.session_id = client_session->get().session_id,
-                                                            .rtp_secret_payload = client_session->get().rtp_secret_payload}));
+          event_bus->fire_event(immer::box<PauseStreamEvent>(
+              PauseStreamEvent{.session_id = client_session->get().session_id,
+                               .rtp_secret_payload = client_session->get().rtp_secret_payload}));
           break;
         case ENET_EVENT_TYPE_RECEIVE:
           enet_packet packet = {event.packet, enet_packet_destroy};
