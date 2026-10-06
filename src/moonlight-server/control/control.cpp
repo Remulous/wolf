@@ -108,9 +108,9 @@ bool encrypt_and_send(std::string_view payload,
 }
 
 std::optional<immer::box<events::StreamSession>> get_current_session(const enet_clients_map &connected_clients,
-                                                         const state::SessionsAtoms &running_sessions,
-                                                         std::string_view client_ip,
-                                                         const ENetEvent &enet_event) {
+                                                                     const state::SessionsAtoms &running_sessions,
+                                                                     std::string_view client_ip,
+                                                                     const ENetEvent &enet_event) {
   if (enet_event.type == ENET_EVENT_TYPE_CONNECT) {
     // A new connection, we should check if there's a session that matches the current client
     for (const StreamSession &session : *running_sessions->load()) {
