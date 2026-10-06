@@ -262,7 +262,11 @@ TEST_CASE("APPs APIs", "[API]") {
                                         .env = {"LOG_LEVEL=1234"},
                                         .devices = {"/dev/input:/dev/input"},
                                         .ports = {"8080:8080"}}};
-  response = req(curl.get(), HTTPMethod::POST, "http://localhost/api/v1/apps/add", rfl::json::write(app));
+  auto legacy_app_json = rfl::json::write(app);
+  const auto session_local_paths = legacy_app_json.find("\"session_local_paths\":[]");
+  REQUIRE(session_local_paths != std::string::npos);
+  legacy_app_json.erase(session_local_paths, std::string{"\"session_local_paths\":[],"}.size());
+  response = req(curl.get(), HTTPMethod::POST, "http://localhost/api/v1/apps/add", legacy_app_json);
   REQUIRE(response);
   REQUIRE_THAT(response->second, Equals("{\"success\":true}"));
 
