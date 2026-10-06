@@ -146,4 +146,5 @@ jobs:
                   -G Ninja
 
             cmake --build build --target wolftests --parallel "$(nproc)"
-            ./build/tests/wolftests
+            cd build/tests
+            ./wolftests
