@@ -1,4 +1,5 @@
 #include <api/api.hpp>
+#include <boost/json.hpp>
 #include <control/input_handler.hpp>
 #include <core/docker.hpp>
 #include <rtp/udp-ping.hpp>
@@ -99,7 +100,20 @@ void UnixSocketServer::endpoint_Apps(const HTTPRequest &req, std::shared_ptr<Uni
 }
 
 void UnixSocketServer::endpoint_AddApp(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket) {
-  auto app = rfl::json::read<rfl::Reflector<events::App>::ReflType, rfl::DefaultIfMissing>(req.body);
+  auto app_payload = req.body;
+  boost::json::error_code error;
+  auto payload_json = boost::json::parse(app_payload, error);
+  if (!error && payload_json.is_object()) {
+    if (auto *runner = payload_json.as_object().if_contains("runner"); runner && runner->is_object()) {
+      auto &runner_json = runner->as_object();
+      if (auto *type = runner_json.if_contains("type"); type && type->is_string() && type->as_string() == "docker" &&
+                                                        !runner_json.if_contains("session_local_paths")) {
+        runner_json["session_local_paths"] = boost::json::array{};
+        app_payload = boost::json::serialize(payload_json);
+      }
+    }
+  }
+  auto app = rfl::json::read<rfl::Reflector<events::App>::ReflType>(app_payload);
   if (app) {
     auto profiles = state_->app_state->config->profiles->load().get();
     state::update_profiles(
