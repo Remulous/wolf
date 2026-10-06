@@ -49,19 +49,19 @@ TEST_CASE("Wayland virtual inputs", "[WAYLAND]") {
     control::handle_input(session, {}, &mv_packet);
     wl_display_roundtrip(wd.get());
 
-    auto m_ev = mouse_events_q->pop();
+    auto m_ev = mouse_events_q->pop(std::chrono::seconds(1));
     REQUIRE(m_ev.has_value());
     REQUIRE(m_ev.value().type == MouseEventType::LEAVE);
 
-    m_ev = mouse_events_q->pop();
+    m_ev = mouse_events_q->pop(std::chrono::seconds(1));
     REQUIRE(m_ev.has_value());
     REQUIRE(m_ev.value().type == MouseEventType::FRAME);
 
-    m_ev = mouse_events_q->pop();
+    m_ev = mouse_events_q->pop(std::chrono::seconds(1));
     REQUIRE(m_ev.has_value());
     REQUIRE(m_ev.value().type == MouseEventType::ENTER);
 
-    m_ev = mouse_events_q->pop();
+    m_ev = mouse_events_q->pop(std::chrono::seconds(1));
     REQUIRE(m_ev.has_value());
     REQUIRE(m_ev.value().type == MouseEventType::MOTION);
     // Values come from zwp_relative_pointer_v1 as wl_fixed_t.
@@ -69,7 +69,7 @@ TEST_CASE("Wayland virtual inputs", "[WAYLAND]") {
     REQUIRE(m_ev.value().x == 10 * 65536);
     REQUIRE(m_ev.value().y == 20 * 65536);
 
-    m_ev = mouse_events_q->pop();
+    m_ev = mouse_events_q->pop(std::chrono::seconds(1));
     REQUIRE(m_ev.has_value());
     REQUIRE(m_ev.value().type == MouseEventType::FRAME);
   }
@@ -81,7 +81,7 @@ TEST_CASE("Wayland virtual inputs", "[WAYLAND]") {
     control::handle_input(session, {}, &press_A_key);
     wl_display_roundtrip(wd.get());
 
-    auto k_ev = kb_events_q->pop();
+    auto k_ev = kb_events_q->pop(std::chrono::seconds(1));
     REQUIRE(k_ev.has_value());
     REQUIRE(k_ev->keycode == 30);
     REQUIRE(k_ev->pressed);
@@ -93,7 +93,7 @@ TEST_CASE("Wayland virtual inputs", "[WAYLAND]") {
     control::handle_input(session, {}, &release_A_key);
     wl_display_roundtrip(wd.get());
 
-    auto k_ev = kb_events_q->pop();
+    auto k_ev = kb_events_q->pop(std::chrono::seconds(1));
     REQUIRE(k_ev.has_value());
     REQUIRE(k_ev->keycode == 30);
     REQUIRE(!k_ev->pressed);
@@ -106,20 +106,20 @@ TEST_CASE("Wayland virtual inputs", "[WAYLAND]") {
     control::handle_input(session, {}, &press_SHIFT_A);
     wl_display_roundtrip(wd.get());
 
-    auto k_ev = kb_events_q->pop();
+    auto k_ev = kb_events_q->pop(std::chrono::seconds(1));
     // Press SHIFT
     REQUIRE(k_ev.has_value());
     REQUIRE(k_ev->keycode == 42);
     REQUIRE(k_ev->pressed);
 
     // Press A
-    k_ev = kb_events_q->pop();
+    k_ev = kb_events_q->pop(std::chrono::seconds(1));
     REQUIRE(k_ev.has_value());
     REQUIRE(k_ev->keycode == 30);
     REQUIRE(k_ev->pressed);
 
     // Release SHIFT
-    k_ev = kb_events_q->pop();
+    k_ev = kb_events_q->pop(std::chrono::seconds(1));
     REQUIRE(k_ev.has_value());
     REQUIRE(k_ev->keycode == 42);
     REQUIRE(!k_ev->pressed);
@@ -135,19 +135,19 @@ TEST_CASE("Wayland virtual inputs", "[WAYLAND]") {
 
     // Compositor sends: axis_source, axis, axis_value120, axis_relative_direction (v9), frame.
     // axis_relative_direction is silently dropped (no queue entry) since we only log it.
-    auto s_ev = mouse_events_q->pop();
+    auto s_ev = mouse_events_q->pop(std::chrono::seconds(1));
     REQUIRE(s_ev.has_value());
     REQUIRE(s_ev.value().type == MouseEventType::AXIS_SOURCE);
 
-    s_ev = mouse_events_q->pop();
+    s_ev = mouse_events_q->pop(std::chrono::seconds(1));
     REQUIRE(s_ev.has_value());
     REQUIRE((s_ev.value().type == MouseEventType::AXIS_VALUE120 || s_ev.value().type == MouseEventType::AXIS));
 
-    s_ev = mouse_events_q->pop();
+    s_ev = mouse_events_q->pop(std::chrono::seconds(1));
     REQUIRE(s_ev.has_value());
     REQUIRE((s_ev.value().type == MouseEventType::AXIS_VALUE120 || s_ev.value().type == MouseEventType::AXIS));
 
-    s_ev = mouse_events_q->pop();
+    s_ev = mouse_events_q->pop(std::chrono::seconds(1));
     REQUIRE(s_ev.has_value());
     REQUIRE(s_ev.value().type == MouseEventType::FRAME);
   }
