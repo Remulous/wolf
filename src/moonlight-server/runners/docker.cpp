@@ -1,5 +1,8 @@
 #include <runners/docker.hpp>
 
+#include <boost/uuid/random_generator.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
 namespace wolf::core::docker {
 
 void create_udev_hw_files(std::filesystem::path base_hw_db_path,
@@ -64,6 +67,42 @@ void RunDocker::run(std::string_view session_id,
   mounts.insert(mounts.end(), this->container.mounts.begin(), this->container.mounts.end());
   for (const auto &path : paths) {
     mounts.insert(mounts.end(), MountPoint{.source = path.first, .destination = path.second, .mode = "rw"});
+  }
+
+  // The app state folder is normally mounted as /home/retro so account data,
+  // configuration, and games survive container recreation. Some application
+  // state is tied to a container hostname/PID and must not be shared with the
+  // next container. Add child mounts after the home mount so Docker gives them
+  // priority, while preserving all other state.
+  std::optional<std::filesystem::path> session_local_state;
+  if (!this->session_local_paths.empty()) {
+    const auto home_mount = std::find_if(paths.begin(), paths.end(), [](const auto &path) {
+      return path.second == "/home/retro";
+    });
+    if (home_mount == paths.end()) {
+      throw std::runtime_error("Session-local paths require the standard /home/retro state mount");
+    }
+
+    const auto invocation_id = boost::uuids::to_string(boost::uuids::random_generator()());
+    const auto local_base = std::filesystem::path(app_state_folder) / ".wolf-session-state" / invocation_id;
+    const auto host_base = std::filesystem::path(home_mount->first) / ".wolf-session-state" / invocation_id;
+    std::filesystem::create_directories(local_base);
+    std::filesystem::permissions(local_base, std::filesystem::perms::all);
+    session_local_state = local_base;
+
+    for (const auto &configured_path : this->session_local_paths) {
+      const auto relative_path = std::filesystem::path(configured_path).lexically_normal();
+      if (relative_path.empty() || relative_path.is_absolute() || relative_path.begin()->string() == "..") {
+        throw std::runtime_error(fmt::format("Invalid session-local path: {}", configured_path));
+      }
+
+      const auto local_path = local_base / relative_path;
+      std::filesystem::create_directories(local_path);
+      std::filesystem::permissions(local_path, std::filesystem::perms::all);
+      mounts.push_back(MountPoint{.source = (host_base / relative_path).string(),
+                                  .destination = (std::filesystem::path("/home/retro") / relative_path).string(),
+                                  .mode = "rw"});
+    }
   }
 
   // Fake udev
@@ -309,6 +348,13 @@ void RunDocker::run(std::string_view session_id,
       std::filesystem::remove_all(udev_base_path);
     } catch (const std::filesystem::filesystem_error &e) {
       logs::log(logs::warning, "Failed to remove udev base path: {}", e.what());
+    }
+  }
+  if (session_local_state) {
+    try {
+      std::filesystem::remove_all(*session_local_state);
+    } catch (const std::filesystem::filesystem_error &e) {
+      logs::log(logs::warning, "Failed to remove session-local state: {}", e.what());
     }
   }
 }

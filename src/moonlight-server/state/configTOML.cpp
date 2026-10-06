@@ -217,8 +217,8 @@ Config load_or_default(const std::string &source,
   // First check the version of the config file
   auto base_cfg = rfl::toml::load<BaseConfig, rfl::DefaultIfMissing>(source).value();
   auto version = base_cfg.config_version.value_or(0);
-  if (version <= 6) {
-    logs::log(logs::warning, "Found old config file (v{}), migrating to v7", version);
+  if (version <= 7) {
+    logs::log(logs::warning, "Found old config file (v{}), migrating to v8", version);
     auto backup = source + ".v" + std::to_string(version) + ".old";
     std::filesystem::rename(source, backup);
     auto old_cfg = toml::parse_file(backup);
@@ -236,6 +236,31 @@ Config load_or_default(const std::string &source,
           toml::array{*moonlight_profile,
                       toml::table({{"id", "user"}, {"name", "User"}, {"apps", old_cfg.at("apps")}})});
     }
+    // Existing installations retain their application definitions during a
+    // config migration. Add the new Steam default explicitly so they gain CEF
+    // cache isolation without replacing their profile, account, or game data.
+    if (auto profiles = new_cfg["profiles"].as_array()) {
+      for (auto &profile_node : *profiles) {
+        auto profile = profile_node.as_table();
+        if (!profile) {
+          continue;
+        }
+        auto apps_node = profile->get("apps");
+        auto apps = apps_node ? apps_node->as_array() : nullptr;
+        if (!apps) {
+          continue;
+        }
+        for (auto &app_node : *apps) {
+          auto app = app_node.as_table();
+          auto runner_node = app ? app->get("runner") : nullptr;
+          auto runner = runner_node ? runner_node->as_table() : nullptr;
+          auto runner_name = runner ? runner->get_as<std::string>("name") : nullptr;
+          if (runner && runner_name && runner_name->get() == "WolfSteam" && !runner->contains("session_local_paths")) {
+            runner->insert_or_assign("session_local_paths", toml::array{".steam/steam/config/htmlcache"});
+          }
+        }
+      }
+    }
     std::ofstream out_file;
     out_file.open(source);
     if (!out_file.is_open()) {
@@ -243,7 +268,7 @@ Config load_or_default(const std::string &source,
     }
     out_file << new_cfg;
     out_file.close();
-    logs::log(logs::debug, "Migrated config from v{} to v7", version);
+    logs::log(logs::debug, "Migrated config from v{} to v8", version);
   }
 
   // Will throw if the config is invalid

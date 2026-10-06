@@ -92,6 +92,10 @@ struct AppDocker {
   std::string name;
   std::string image;
   std::vector<std::string> mounts;
+  // Relative paths below /home/retro that receive a fresh bind mount for each
+  // runner invocation. This keeps transient application state out of the
+  // persistent per-profile home directory.
+  std::vector<std::string> session_local_paths = {};
   std::vector<std::string> env;
   std::vector<std::string> devices;
   std::vector<std::string> ports;

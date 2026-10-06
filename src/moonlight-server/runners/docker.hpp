@@ -81,6 +81,7 @@ public:
                                .mounts = mounts,
                                .devices = devices,
                                .env = runner_cfg.env},
+                     runner_cfg.session_local_paths,
                      docker_socket);
   }
 
@@ -99,6 +100,7 @@ public:
         .image = container.image,
         .mounts = container.mounts | transform([](const auto &el) { return fmt::format("{}", el); }) |
                   ranges::to_vector,
+        .session_local_paths = session_local_paths,
         .env = container.env,
         .devices = container.devices | transform([](const auto &el) { return fmt::format("{}", el); }) |
                    ranges::to_vector,
@@ -110,14 +112,16 @@ protected:
   RunDocker(std::shared_ptr<events::EventBusType> ev_bus,
             std::string base_create_json,
             docker::Container base_container,
+            std::vector<std::string> session_local_paths,
             std::string docker_socket)
       : ev_bus(std::move(ev_bus)), container(std::move(base_container)), base_create_json(std::move(base_create_json)),
-        docker_api(std::move(docker_socket)) {}
+        session_local_paths(std::move(session_local_paths)), docker_api(std::move(docker_socket)) {}
 
 private:
   std::shared_ptr<events::EventBusType> ev_bus;
   docker::Container container;
   std::string base_create_json;
+  std::vector<std::string> session_local_paths;
   docker::DockerAPI docker_api;
 };
 
