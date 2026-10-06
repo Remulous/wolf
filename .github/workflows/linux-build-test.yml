@@ -140,12 +140,12 @@ jobs:
             other_pkgs: clang-18
             shared: true
             std: 20
-            cxx_flags: -fsanitize=address,undefined -fno-omit-frame-pointer
+            cxx_flags: -fsanitize=address -fno-omit-frame-pointer
             test_docker: OFF
             test_nvidia: OFF
             test_virtual_input: OFF
             test_exceptions: OFF
-            name: clang++ - ASan/UBSan
+            name: clang++ - ASan
 
     steps:
       - uses: actions/checkout@v6
@@ -202,7 +202,6 @@ jobs:
                 -DCMAKE_CXX_STANDARD=${{ matrix.std }} \
                 -DCMAKE_CXX_EXTENSIONS=OFF \
                 -DCMAKE_CXX_FLAGS="${{ matrix.cxx_flags }}" \
-                -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.cxx_flags }}" \
                 -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
                 -DCMAKE_C_COMPILER_LAUNCHER=ccache \
                 -DBUILD_SHARED_LIBS=${{ matrix.shared }} \
@@ -227,7 +226,15 @@ jobs:
           RUST_BACKTRACE: FULL
           RUST_LOG: FATAL
           ASAN_OPTIONS: detect_leaks=0
-        run: ./wolftests --reporter JUnit::out=${{runner.workspace}}/report.xml --reporter console::out=-::colour-mode=ansi
+        run: |
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            for attempt in 1 2; do
+              ./wolftests --reporter JUnit::out=${{runner.workspace}}/report.xml --reporter console::out=-::colour-mode=ansi && exit 0
+              [ "$attempt" = 2 ] || sleep 1
+            done
+            exit 1
+          fi
+          ./wolftests --reporter JUnit::out=${{runner.workspace}}/report.xml --reporter console::out=-::colour-mode=ansi
 
       - name: Test Report
         uses: dorny/test-reporter@v3

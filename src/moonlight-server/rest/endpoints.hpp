@@ -373,7 +373,8 @@ auto create_run_session(const SimpleWeb::CaseInsensitiveMultimap &headers,
                         const state::PairedClient &current_client,
                         immer::box<state::AppState> state,
                         const events::App &run_app) {
-  auto display_mode_str = utils::split(get_header(headers, "mode").value_or("1920x1080x60"), 'x');
+  auto display_mode_input = get_header(headers, "mode").value_or("1920x1080x60");
+  auto display_mode_str = utils::split(display_mode_input, 'x');
   moonlight::DisplayMode display_mode = {std::stoi(display_mode_str[0].data()),
                                          std::stoi(display_mode_str[1].data()),
                                          std::stoi(display_mode_str[2].data()),

@@ -108,9 +108,9 @@ bool encrypt_and_send(std::string_view payload,
 }
 
 std::optional<immer::box<events::StreamSession>> get_current_session(const enet_clients_map &connected_clients,
-                                                         const state::SessionsAtoms &running_sessions,
-                                                         std::string_view client_ip,
-                                                         const ENetEvent &enet_event) {
+                                                                     const state::SessionsAtoms &running_sessions,
+                                                                     std::string_view client_ip,
+                                                                     const ENetEvent &enet_event) {
   if (enet_event.type == ENET_EVENT_TYPE_CONNECT) {
     // A new connection, we should check if there's a session that matches the current client
     for (const StreamSession &session : *running_sessions->load()) {
@@ -188,9 +188,9 @@ void run_control(int port,
         case ENET_EVENT_TYPE_DISCONNECT:
           logs::log(logs::debug, "[ENET] disconnected client: {}:{}", client_ip, client_port);
           connected_clients.update([peer = event.peer](const enet_clients_map &m) { return m.erase(peer); });
-          event_bus->fire_event(
-              immer::box<PauseStreamEvent>(PauseStreamEvent{.session_id = client_session->get().session_id,
-                                                            .rtp_secret_payload = client_session->get().rtp_secret_payload}));
+          event_bus->fire_event(immer::box<PauseStreamEvent>(
+              PauseStreamEvent{.session_id = client_session->get().session_id,
+                               .rtp_secret_payload = client_session->get().rtp_secret_payload}));
           break;
         case ENET_EVENT_TYPE_RECEIVE:
           enet_packet packet = {event.packet, enet_packet_destroy};
