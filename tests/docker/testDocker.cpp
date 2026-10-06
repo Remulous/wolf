@@ -91,6 +91,7 @@ TEST_CASE("Docker TOML", "[DOCKER]") {
     env = [
       "LOG_LEVEL=info"
     ]
+    session_local_paths = []
     base_create_json = "{'HostConfig': {}}"
 
     )";
@@ -110,6 +111,7 @@ TEST_CASE("Docker TOML", "[DOCKER]") {
                    "/tmp:/tmp:rw",
                }));
   REQUIRE_THAT(container.env, Equals(std::vector<std::string>{"LOG_LEVEL=info"}));
+  REQUIRE(container.session_local_paths.empty());
   REQUIRE_THAT(container.base_create_json.value(), Equals("{'HostConfig': {}}"));
 }
 
