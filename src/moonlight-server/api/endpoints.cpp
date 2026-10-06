@@ -99,7 +99,7 @@ void UnixSocketServer::endpoint_Apps(const HTTPRequest &req, std::shared_ptr<Uni
 }
 
 void UnixSocketServer::endpoint_AddApp(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket) {
-  auto app = rfl::json::read<rfl::Reflector<events::App>::ReflType>(req.body);
+  auto app = rfl::json::read<rfl::Reflector<events::App>::ReflType, rfl::DefaultIfMissing>(req.body);
   if (app) {
     auto profiles = state_->app_state->config->profiles->load().get();
     state::update_profiles(
