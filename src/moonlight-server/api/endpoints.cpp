@@ -101,7 +101,7 @@ void UnixSocketServer::endpoint_Apps(const HTTPRequest &req, std::shared_ptr<Uni
 
 void UnixSocketServer::endpoint_AddApp(const HTTPRequest &req, std::shared_ptr<UnixSocket> socket) {
   auto app_payload = req.body;
-  boost::json::error_code error;
+  boost::system::error_code error;
   auto payload_json = boost::json::parse(app_payload, error);
   if (!error && payload_json.is_object()) {
     if (auto *runner = payload_json.as_object().if_contains("runner"); runner && runner->is_object()) {
