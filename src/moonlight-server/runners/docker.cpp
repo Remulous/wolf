@@ -76,9 +76,8 @@ void RunDocker::run(std::string_view session_id,
   // priority, while preserving all other state.
   std::optional<std::filesystem::path> session_local_state;
   if (!this->session_local_paths.empty()) {
-    const auto home_mount = std::find_if(paths.begin(), paths.end(), [](const auto &path) {
-      return path.second == "/home/retro";
-    });
+    const auto home_mount =
+        std::find_if(paths.begin(), paths.end(), [](const auto &path) { return path.second == "/home/retro"; });
     if (home_mount == paths.end()) {
       throw std::runtime_error("Session-local paths require the standard /home/retro state mount");
     }
