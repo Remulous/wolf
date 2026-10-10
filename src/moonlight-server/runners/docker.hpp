@@ -81,7 +81,7 @@ public:
                                .mounts = mounts,
                                .devices = devices,
                                .env = runner_cfg.env},
-                     runner_cfg.session_local_paths,
+                     runner_cfg.session_local_paths.value_or(std::vector<std::string>{}),
                      docker_socket);
   }
 
