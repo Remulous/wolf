@@ -259,13 +259,15 @@ TEST_CASE("APPs APIs", "[API]") {
       .runner = wolf::config::AppDocker{.name = "test",
                                         .image = "test",
                                         .mounts = {"/tmp:/tmp"},
+                                        .session_local_paths = std::vector<std::string>{"foo"},
                                         .env = {"LOG_LEVEL=1234"},
                                         .devices = {"/dev/input:/dev/input"},
                                         .ports = {"8080:8080"}}};
   auto legacy_app_json = rfl::json::write(app);
-  const auto session_local_paths = legacy_app_json.find("\"session_local_paths\":[]");
+  const std::string session_local_paths_field = "\"session_local_paths\":[\"foo\"],";
+  const auto session_local_paths = legacy_app_json.find(session_local_paths_field);
   REQUIRE(session_local_paths != std::string::npos);
-  legacy_app_json.erase(session_local_paths, std::string{"\"session_local_paths\":[],"}.size());
+  legacy_app_json.erase(session_local_paths, session_local_paths_field.size());
   response = req(curl.get(), HTTPMethod::POST, "http://localhost/api/v1/apps/add", legacy_app_json);
   REQUIRE(response);
   REQUIRE_THAT(response->second, Equals("{\"success\":true}"));
